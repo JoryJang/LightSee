@@ -59,6 +59,7 @@ private:
     void startLoad(const QString& path);
     void showCurrent();
     void rebuildThumbPanel();
+    void updatePanelVisibility();   // actPanel 勾选且当前目录有图才显示
     void toggleFullScreen();
     void maybeWarnHeicUnavailable(const QString& path);
     void preloadNeighbors();     // Task 7：fire-and-forget 预解码 next/prev 进缓存

@@ -32,36 +32,29 @@
        <item><widget class="QPushButton" name="btnClose"><property name="focusPolicy"><enum>Qt::NoFocus</enum></property><property name="text"><string>✕</string></property></widget></item>
       </layout>
      </widget></item>
-    <item><widget class="QWidget" name="centerArea">
-      <layout class="QHBoxLayout" name="centerLayout">
-       <property name="spacing"><number>0</number></property>
-       <property name="leftMargin"><number>0</number></property>
-       <property name="topMargin"><number>0</number></property>
-       <property name="rightMargin"><number>0</number></property>
-       <property name="bottomMargin"><number>0</number></property>
-       <item><widget class="ImageView" name="canvas">
-      <property name="mouseTracking"><bool>true</bool></property>
-      <property name="acceptDrops"><bool>false</bool></property>
-      <property name="focusPolicy"><enum>Qt::NoFocus</enum></property>
-    </widget></item>
-    <item><widget class="QListWidget" name="thumbPanel">
-      <property name="sizePolicy">
-        <sizepolicy hsizetype="Fixed" vsizetype="Expanding"><horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy>
-      </property>
-      <property name="minimumSize"><size><width>180</width><height>0</height></size></property>
-      <property name="maximumSize"><size><width>180</width><height>16777215</height></size></property>
-      <property name="viewMode"><enum>QListView::IconMode</enum></property>
-      <property name="iconSize"><size><width>150</width><height>110</height></size></property>
-      <property name="resizeMode"><enum>QListView::Adjust</enum></property>
-      <property name="movement"><enum>QListView::Static</enum></property>
-      <property name="spacing"><number>6</number></property>
-      <property name="uniformItemSizes"><bool>true</bool></property>
-      <property name="horizontalScrollBarPolicy"><enum>Qt::ScrollBarAlwaysOff</enum></property>
-      <property name="selectionBehavior"><enum>QAbstractItemView::SelectItems</enum></property>
-      <property name="focusPolicy"><enum>Qt::NoFocus</enum></property>
-      <property name="frameShape"><enum>QFrame::NoFrame</enum></property>
-     </widget></item>
-   </layout>
+    <item><widget class="QSplitter" name="centerSplit">
+      <property name="orientation"><enum>Qt::Vertical</enum></property>
+      <property name="childrenCollapsible"><bool>false</bool></property>
+      <widget class="ImageView" name="canvas">
+        <property name="mouseTracking"><bool>true</bool></property>
+        <property name="acceptDrops"><bool>false</bool></property>
+        <property name="focusPolicy"><enum>Qt::NoFocus</enum></property>
+      </widget>
+      <widget class="QListWidget" name="thumbPanel">
+        <property name="minimumSize"><size><width>0</width><height>80</height></size></property>
+        <property name="viewMode"><enum>QListView::IconMode</enum></property>
+        <property name="flow"><enum>QListView::LeftToRight</enum></property>
+        <property name="iconSize"><size><width>150</width><height>110</height></size></property>
+        <!-- Adjust 会把整排缩略图压进固定高度导致变形；横排必须 Fixed + 水平滚动 -->
+        <property name="resizeMode"><enum>QListView::Fixed</enum></property>
+        <property name="movement"><enum>QListView::Static</enum></property>
+        <property name="spacing"><number>6</number></property>
+        <property name="uniformItemSizes"><bool>true</bool></property>
+        <property name="verticalScrollBarPolicy"><enum>Qt::ScrollBarAlwaysOff</enum></property>
+        <property name="selectionBehavior"><enum>QAbstractItemView::SelectItems</enum></property>
+        <property name="focusPolicy"><enum>Qt::NoFocus</enum></property>
+        <property name="frameShape"><enum>QFrame::NoFrame</enum></property>
+      </widget>
     </widget></item>
    </layout>
   </widget>

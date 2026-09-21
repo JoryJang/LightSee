@@ -84,8 +84,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     // ——恢复不触发 onTogglePanel，避免 populate 风暴（brief 允许 blockSignals 或先设再连，取后者）。
     {
         const bool panelOn = Settings::value("view/thumbPanel", false).toBool();
-        ui.thumbPanel->setVisible(panelOn);        // 面板显隐由 actPanel 控制（Task 4 语义）
         ui.actPanel->setChecked(panelOn);
+        updatePanelVisibility();   // 启动时目录为空 → 面板隐藏（显隐还看有无图片）
+        const QByteArray split = Settings::value("view/thumbSplit").toByteArray();
+        if (!split.isEmpty())
+            ui.centerSplit->restoreState(split);
+        else
+            ui.centerSplit->setSizes(QList<int>() << 600 << 132);   // 首次：底部条 132px
     }
     m_winGeometry = Settings::value("win/geometry").toByteArray();
     if (!m_winGeometry.isEmpty())
@@ -204,8 +209,15 @@ void MainWindow::syncTitle()
     ui.lblTitle->setText(windowTitle());
 }
 
+void MainWindow::updatePanelVisibility()
+{
+    // 无图可看时底部条没有意义：显隐 = 用户勾选 && 目录里有图。
+    ui.thumbPanel->setVisible(ui.actPanel->isChecked() && !m_model.files().isEmpty());
+}
+
 void MainWindow::rebuildThumbPanel()
 {
+    updatePanelVisibility();
     // 懒加载：面板可见时才 populate；setPath 后可见则立即重建。
     if (ui.thumbPanel->isVisible())
         m_thumbs->populate(ui.thumbPanel, m_model.files());
@@ -318,8 +330,8 @@ void MainWindow::onFlipV()  { ui.canvas->flipVertical(); }
 
 void MainWindow::onTogglePanel()
 {
-    ui.thumbPanel->setVisible(ui.actPanel->isChecked());
-    if (ui.actPanel->isChecked()) rebuildThumbPanel();
+    updatePanelVisibility();
+    if (ui.thumbPanel->isVisible()) rebuildThumbPanel();
 }
 
 void MainWindow::onZoomChanged(double f)
@@ -553,6 +565,7 @@ void MainWindow::closeEvent(QCloseEvent* e)
 {
     Settings::setValue("win/geometry", saveGeometry());
     Settings::setValue("view/thumbPanel", ui.actPanel->isChecked());
+    Settings::setValue("view/thumbSplit", ui.centerSplit->saveState());   // 记忆拖出来的高度比例
     const QString dir = QFileInfo(m_model.current()).absolutePath();
     if (!dir.isEmpty())
         Settings::setValue("win/lastDir", dir);

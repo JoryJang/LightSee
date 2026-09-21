@@ -13,6 +13,9 @@ QListWidget#thumbPanel { background: #ffffff; border: none; }
 QListWidget#thumbPanel::item { color: #333538; border-radius: 6px; padding: 4px; }
 QListWidget#thumbPanel::item:hover { background: #eceef1; }
 QListWidget#thumbPanel::item:selected { background: #0a6ed1; color: white; }
+/* 画布与底部缩略图条之间的拖拽分隔条 */
+QSplitter#centerSplit::handle { background: #d8dade; height: 6px; }
+QSplitter#centerSplit::handle:hover { background: #b9bec6; }
 QGraphicsView#canvas { background: #f5f6f8; }
 QToolTip { background: #ffffff; color: #333538; border: 1px solid #cdd1d7; }
 /* 自定义标题栏（setMenuWidget 挂在窗口最顶，工具栏之上） */
