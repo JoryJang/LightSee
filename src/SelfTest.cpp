@@ -6,10 +6,14 @@
 #define _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING
 #include "src/SelfTest.h"
 #include "src/FolderModel.h"
+#include "src/ImageView.h"
+#include "src/MainWindow.h"
 #include "src/PreloadCache.h"
 #include "src/RecycleBin.h"
 #include "src/SlideShowController.h"
 #include <QCoreApplication>
+#include <QGraphicsScene>
+#include <QLabel>
 #include <QImageReader>
 #include <QImage>
 #include <QFileInfo>
@@ -211,6 +215,57 @@ int SelfTest::run()
         const bool trimmed = c.size() == PreloadCache::Cap / 2;
         std::printf("  preload: size after 13th put = %d (cap %d)\n", c.size(), int(PreloadCache::Cap));
         CHECK(trimmed, "preload: over-cap put trims to half of cap");
+    }
+
+    // --- ImageView scene rect (滚动条残留回归) ---
+    {
+        // Qt 的自动 sceneRect 只增不缩（clear 也不重置），而滚动条范围由 sceneRect
+        // 决定：大图撑大 sceneRect 后切小图 → 视口两侧残留滚动条。断言切图后
+        // sceneRect 精确收缩到当前图边界（(0,0) 起、100x80），即证明修复生效。
+        ImageView view;
+        QImage big(4000, 3000, QImage::Format_ARGB32); big.fill(Qt::gray);
+        QImage small(100, 80, QImage::Format_ARGB32); small.fill(Qt::blue);
+        view.setImage(big);
+        view.setImage(small);
+        const bool shrunk = view.scene()
+            && view.scene()->sceneRect() == QRectF(0, 0, 100, 80);
+        std::printf("  imageview: sceneRect after big->small = %f x %f\n",
+                    view.scene() ? view.scene()->sceneRect().width() : -1.0,
+                    view.scene() ? view.scene()->sceneRect().height() : -1.0);
+        CHECK(shrunk, "imageview: scene rect shrinks to current image (no leftover scrollbars)");
+    }
+
+    // --- 绕中心旋转（回归：变换原点默认 (0,0) 左上角，90° 后图片跳位） ---
+    {
+        ImageView view;
+        QImage img(100, 80, QImage::Format_ARGB32); img.fill(Qt::red);
+        view.setImage(img);
+        const QPointF c0 = view.scene()->itemsBoundingRect().center();
+        view.rotateBy(90);
+        const QPointF c1 = view.scene()->itemsBoundingRect().center();
+        // sceneRect 必须跟随旋转后的包围盒，否则适应缩放按旧矩形算、画面被裁。
+        const bool rectFollows = view.scene()->sceneRect() == view.scene()->itemsBoundingRect();
+        std::printf("  rotate: center before=(%.0f,%.0f) after90=(%.0f,%.0f) rectFollows=%d\n",
+                    c0.x(), c0.y(), c1.x(), c1.y(), rectFollows ? 1 : 0);
+        CHECK(QLineF(c0, c1).length() < 1.0 && rectFollows,
+              "rotate: 90deg keeps center, scene rect follows bounding box");
+    }
+
+    // --- dark.qss 状态栏文字可读性（回归：常驻 QLabel 曾实测拿到黑色 windowText） ---
+    {
+        MainWindow probe;
+        probe.resize(500, 100);
+        // 复刻主窗口用法：常驻 QLabel + 临时消息，均须为浅色文字（深底 #232428 上黑色不可读）。
+        auto* lbl = new QLabel(QStringLiteral("1920\u00D71080"), &probe);
+        probe.statusBar()->addPermanentWidget(lbl);
+        probe.ensurePolished();
+        lbl->ensurePolished();
+        const QColor lb = lbl->palette().windowText().color();
+        const QColor sb = probe.statusBar()->palette().windowText().color();
+        std::printf("  qss: label windowText=rgb(%d,%d,%d) statusBar windowText=rgb(%d,%d,%d)\n",
+                    lb.red(), lb.green(), lb.blue(), sb.red(), sb.green(), sb.blue());
+        CHECK(qGray(lb.rgb()) >= 100 && qGray(sb.rgb()) >= 100,
+              "qss: statusbar message & permanent label text are legible (light)");
     }
 
     return g_fail;

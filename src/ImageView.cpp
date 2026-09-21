@@ -50,8 +50,9 @@ void ImageView::setImage(const QImage& img)
     m_scene->clear();
     m_item = m_scene->addPixmap(QPixmap::fromImage(img));
     m_item->setTransformationMode(Qt::SmoothTransformation);
-    applyItemTransform();
-    if (m_fitMode) fitToWindow(); else emit zoomChanged(transform().m11());
+    applyItemTransform();   // 内含 sceneRect 收缩到当前图（大图后小图不残留滚动条）
+    // 切图统一回到"适应窗口 + 居中"，不沿用上一张的缩放/平移状态。
+    fitToWindow();
 }
 
 void ImageView::clearImage()
@@ -66,6 +67,7 @@ void ImageView::fitToWindow()
     m_fitMode = true;
     resetTransform();
     fitInView(m_item, Qt::KeepAspectRatio);
+    centerOn(m_item);   // 5.14 fitInView 有取整偏移，补一次真居中
     emit zoomChanged(transform().m11());
 }
 
@@ -88,16 +90,24 @@ void ImageView::zoomBy(double factor)
     emit zoomChanged(transform().m11());
 }
 
-void ImageView::rotateBy(double degrees) { m_rotation = std::fmod(m_rotation + degrees, 360.0); applyItemTransform(); }
+void ImageView::rotateBy(double degrees) { m_rotation = std::fmod(m_rotation + degrees, 360.0); applyItemTransform(); if (m_fitMode) fitToWindow(); }
 void ImageView::flipHorizontal() { m_flipH = !m_flipH; applyItemTransform(); }
 void ImageView::flipVertical()   { m_flipV = !m_flipV; applyItemTransform(); }
 
 void ImageView::applyItemTransform()
 {
     if (!m_item) return;
+    // 绕图片中心变换：显式 bake translate(c)*T*translate(-c) 进矩阵。
+    // 不用 setTransformOriginPoint —— 实测 5.14 的 sceneBoundingRect 不把它计入，
+    // 包围盒/命中仍按左上角旋转，位置照样跳。
+    const QPointF c = m_item->boundingRect().center();
     m_item->setTransform(QTransform()
+        .translate(c.x(), c.y())
         .rotate(m_rotation)
-        .scale(m_flipH ? -1 : 1, m_flipV ? -1 : 1));
+        .scale(m_flipH ? -1 : 1, m_flipV ? -1 : 1)
+        .translate(-c.x(), -c.y()));
+    // sceneRect 跟随变换后的包围盒（90° 旋转宽高互换），否则滚动条/适应缩放按旧矩形算。
+    m_scene->setSceneRect(m_item->sceneBoundingRect());
 }
 
 void ImageView::wheelEvent(QWheelEvent* e)
