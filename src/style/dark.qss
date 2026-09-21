@@ -15,3 +15,10 @@ QListWidget#thumbPanel::item:hover { background: #2b2d32; }
 QListWidget#thumbPanel::item:selected { background: #0a84ff; color: white; }
 QGraphicsView#canvas { background: #17181a; }
 QToolTip { background: #2b2d32; color: #e6e7e9; border: 1px solid #3f4147; }
+/* 自定义标题栏（setMenuWidget 挂在窗口最顶，工具栏之上） */
+QWidget#titleBar { background: #17181a; }
+QLabel#lblTitle { color: #d8d9db; font-size: 12px; }
+#titleBar QPushButton { background: transparent; border: none; color: #d8d9db;
+                        padding: 0 10px; min-width: 26px; }
+#titleBar QPushButton:hover { background: #2b2d32; }
+#titleBar QPushButton#btnClose:hover { background: #c42b1c; color: white; }

@@ -2,6 +2,7 @@
 #include "src/ThumbnailLoader.h"
 #include "src/Settings.h"
 #include "src/RecycleBin.h"
+#include "src/Log.h"
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImageReader>
@@ -20,6 +21,13 @@
 #include <QDir>
 #include <QDateTime>
 #include <QFile>
+#include <QPushButton>
+#include <QWindow>
+#ifdef Q_OS_WIN
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <windowsx.h>
+#endif
 
 static QImage decodeImage(const QString& path)
 {
@@ -32,7 +40,9 @@ static QImage decodeImage(const QString& path)
 // 绝不触碰 MainWindow —— 窗口析构后 worker 照常安全收尾（见 PreloadCache.h）。
 static void preloadInto(std::shared_ptr<PreloadCache> cache, const QString path)
 {
-    cache->put(path, decodeImage(path));
+    const QImage img = decodeImage(path);
+    if (img.isNull()) L_DEBUG("预加载解码失败: {}", path.toStdString());
+    cache->put(path, img);
 }
 
 static QString humanSize(qint64 bytes)
@@ -55,10 +65,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 {
     ui.setupUi(this);
 
-    // Task 8：现代深色样式（rcc 资源 :/dark.qss）。资源缺失时正常以默认样式运行。
-    QFile qss(":/dark.qss");
-    if (qss.open(QIODevice::ReadOnly))
-        setStyleSheet(QString::fromUtf8(qss.readAll()));
+    // Task 8：界面主题。ui/theme 读档（0=深色默认），资源缺失时以默认样式运行。
+    m_theme = Settings::value("ui/theme", 0).toInt() == 1 ? 1 : 0;
+    applyTheme();
+
+    // 自定义标题栏：.ui 中挂在 centralArea 首行，setMenuWidget 会把它重挂到
+    // 菜单区（工具栏之上、窗口最顶），centralArea 只剩一个空的布局占位项。
+    // 裸 QWidget 默认不画 QSS background，必须显式开 WA_StyledBackground。
+    ui.titleBar->setAttribute(Qt::WA_StyledBackground, true);
+    setMenuWidget(ui.titleBar);
+    connect(ui.btnMin,    &QPushButton::clicked, this, &QWidget::showMinimized);
+    connect(ui.btnMax,    &QPushButton::clicked, this, [this]{
+        isMaximized() ? showNormal() : showMaximized();
+    });
+    connect(ui.btnClose,  &QPushButton::clicked, this, &QWidget::close);
 
     // Task 7：启动状态恢复。actPanel 的 setChecked 放在 toggled connect 之前
     // ——恢复不触发 onTogglePanel，避免 populate 风暴（brief 允许 blockSignals 或先设再连，取后者）。
@@ -129,6 +149,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     });
 
     updateActionStates();   // Task 7：启动即无图 → prev/next/slide/delete 禁用
+    L_INFO("主窗口初始化完成：主题={}，缩略图面板={}，背景模式={}",
+           m_theme, ui.thumbPanel->isVisible() ? "开" : "关", int(m_bgMode));
 }
 
 void MainWindow::onOpen()
@@ -140,7 +162,7 @@ void MainWindow::onOpen()
     }();
     const QString path = QFileDialog::getOpenFileName(this, tr("打开图片"), dir,
         tr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.ico *.svg *.heic *.heif *.hif);;所有文件 (*)"));
-    if (!path.isEmpty()) { dir = QFileInfo(path).absolutePath(); openFile(path); }
+    if (!path.isEmpty()) { dir = QFileInfo(path).absolutePath(); L_INFO("文件对话框选择: {}", path.toStdString()); openFile(path); }
 }
 
 // final-fix I1+I2：统一入口（openFile / dropEvent / main.cpp CLI 共用此路径）。
@@ -152,10 +174,12 @@ void MainWindow::openFile(const QString& path)
     if (QFileInfo(path).isDir())
         target = FolderModel::firstSupportedFile(path);
     if (target.isEmpty() || !m_model.setPath(target)) {
+        L_WARN("openFile 失败: {}", path.toStdString());
         ui.statusBar->showMessage(tr("无法打开：%1").arg(path), 5000);
         updateActionStates();
         return;
     }
+    L_INFO("openFile: {} → {}", path.toStdString(), target.toStdString());
     rebuildThumbPanel();
     showCurrent();
 }
@@ -171,6 +195,13 @@ void MainWindow::showCurrent()
     if (auto* it = ui.thumbPanel->item(idx)) ui.thumbPanel->scrollToItem(it);
     setWindowTitle(tr("%1 (%2/%3) - LightSee 看图")
         .arg(QFileInfo(path).fileName()).arg(idx + 1).arg(total));
+    syncTitle();
+}
+
+// windowTitle 仍是任务栏/Alt-Tab 的显示源，自定义条只是镜像一份。
+void MainWindow::syncTitle()
+{
+    ui.lblTitle->setText(windowTitle());
 }
 
 void MainWindow::rebuildThumbPanel()
@@ -201,6 +232,7 @@ void MainWindow::startLoad(const QString& path)
     // watcher 结果会因 seq 不符被丢弃，不会覆盖本次画面（brief 要求的防竞态）。
     QImage cached;
     if (m_cache->get(path, &cached)) {
+        L_DEBUG("预加载缓存命中: {}", path.toStdString());
         onLoadFinished(path, cached);
         return;
     }
@@ -213,6 +245,7 @@ void MainWindow::startLoad(const QString& path)
         if (seq == m_loadSeq) onLoadFinished(path, img);
     });
     w->setFuture(QtConcurrent::run(&decodeImage, path));
+    L_DEBUG("异步解码开始: {}", path.toStdString());
     ui.statusBar->showMessage(tr("正在加载 %1 …").arg(QFileInfo(path).fileName()));
 }
 
@@ -245,6 +278,7 @@ void MainWindow::updateActionStates()
 void MainWindow::onLoadFinished(const QString& path, const QImage& img)
 {
     if (img.isNull()) {
+        L_WARN("图片解码失败: {}", path.toStdString());
         ui.statusBar->showMessage(tr("%1 无法读取（已跳过记录）").arg(QFileInfo(path).fileName()));
         ui.canvas->clearImage();
         if (m_lblInfo) m_lblInfo->clear();
@@ -255,6 +289,7 @@ void MainWindow::onLoadFinished(const QString& path, const QImage& img)
     }
     ui.canvas->setImage(img);
     const QFileInfo fi(path);
+    L_DEBUG("已上屏: {} ({}x{}, {})", path.toStdString(), img.width(), img.height(), humanSize(fi.size()).toStdString());
     ui.statusBar->clearMessage();
     if (m_lblInfo)
         m_lblInfo->setText(tr("%1×%2 · %3").arg(img.width()).arg(img.height()).arg(humanSize(fi.size())));
@@ -266,6 +301,7 @@ void MainWindow::maybeWarnHeicUnavailable(const QString& path)
 {
     if (m_heicWarnShown || !isHeicSuffix(path)) return;
     m_heicWarnShown = true;   // 本次会话只弹一次，避免连续翻看 HEIC 时反复打断
+    L_WARN("HEIC 解码失败，提示检查 heif.dll/qheif 插件部署: {}", path.toStdString());
     QMessageBox::warning(this, tr("无法解码 HEIC"),
         tr("无法解码 HEIC。请确认 exe 目录下存在 heif.dll/libde265.dll "
            "且 imageformats\\qheif.dll 已部署。"));
@@ -323,6 +359,18 @@ void MainWindow::onSlideToggled(bool on)
     if (m_lblSlide) m_lblSlide->setVisible(on);   // Task 7：播放中常驻 "▶ 播放中"
 }
 
+// 主题切换：整体替换样式表，Qt 会对所有子控件重新 polish，无需重启。
+void MainWindow::applyTheme()
+{
+    QFile qss(m_theme == 1 ? ":/light.qss" : ":/dark.qss");
+    if (qss.open(QIODevice::ReadOnly))
+        setStyleSheet(QString::fromUtf8(qss.readAll()));
+    else {
+        L_WARN("主题样式表资源缺失: {}", qss.fileName().toStdString());
+        setStyleSheet(QString());
+    }
+}
+
 // Task 7：画布右键菜单（customContextMenuRequested 显式 connect 进来）。
 // 菜单项是代码内 QMenu/Action，非布局重建，不违反 .ui 规则。
 void MainWindow::onCanvasMenu(const QPoint& pos)
@@ -338,6 +386,16 @@ void MainWindow::onCanvasMenu(const QPoint& pos)
         a->setCheckable(true);
         a->setData(i);
         a->setChecked(i == int(m_bgMode));
+    }
+
+    QMenu* themeMenu = menu.addMenu(tr("界面主题"));
+    QList<QAction*> themeActs;
+    themeActs << themeMenu->addAction(tr("深色")) << themeMenu->addAction(tr("白色"));
+    for (int i = 0; i < themeActs.size(); ++i) {
+        QAction* a = themeActs[i];
+        a->setCheckable(true);
+        a->setData(i);
+        a->setChecked(i == m_theme);
     }
 
     QMenu* intervalMenu = menu.addMenu(tr("幻灯片间隔"));
@@ -357,10 +415,17 @@ void MainWindow::onCanvasMenu(const QPoint& pos)
         m_bgMode = ImageView::Background(picked->data().toInt());
         ui.canvas->setBackgroundMode(m_bgMode);
         Settings::setValue("view/bgMode", int(m_bgMode));
+        L_DEBUG("画布背景切换为 {}", int(m_bgMode));
+    } else if (themeActs.contains(picked)) {
+        m_theme = picked->data().toInt();
+        applyTheme();
+        Settings::setValue("ui/theme", m_theme);
+        L_DEBUG("界面主题切换为 {}", m_theme);
     } else {   // 间隔项：data = ms
         const int ms = picked->data().toInt();
         Settings::setValue("slide/intervalMs", ms);
         if (m_slide.isRunning()) m_slide.start(ms);   // 播放中改间隔 → 立即按新节律重启计时
+        L_DEBUG("幻灯片间隔设置为 {}ms", ms);
     }
 }
 
@@ -380,6 +445,7 @@ void MainWindow::onDelete()
 
     QString err;
     if (!RecycleBin::moveToRecycleBin(oldPath, &err)) {
+        L_ERROR("移入回收站失败: {}（原因: {}）", oldPath.toStdString(), err.toStdString());
         // T8 才有 QSS；这里用消息标签自带的富文本着色（QLabel::AutoText 会识别 HTML）。
         ui.statusBar->showMessage(
             tr("<span style=\"color:#e5484d;\">无法移入回收站：%1（原因：%2）</span>").arg(fileName, err));
@@ -387,9 +453,11 @@ void MainWindow::onDelete()
     }
 
     m_model.removeFile(oldPath);
+    L_INFO("已移入回收站: {}（目录剩余 {} 张）", oldPath.toStdString(), m_model.files().size());
     rebuildThumbPanel();   // 已删条目从面板消失（面板可见时 populate，等价于 m_thumbs->populate）
 
     if (m_model.files().isEmpty()) {
+        L_INFO("目录内已无图片，回空态并停止幻灯片");
         m_currentPath.clear();
         ++m_loadSeq;       // 作废仍在途的异步解码结果，避免它把已删图片又画回来
         // 目录已无图片：取消幻灯片勾选。setChecked(false) 触发 toggled(false) →
@@ -400,6 +468,7 @@ void MainWindow::onDelete()
         if (m_lblInfo) m_lblInfo->clear();
         if (m_lblZoom) m_lblZoom->clear();
         setWindowTitle(tr("LightSee 看图"));
+        syncTitle();
         updateActionStates();   // Task 7：末图删空 → prev/next/slide/delete 回到禁用
         ui.statusBar->showMessage(tr("已移入回收站：%1（目录内已无图片）").arg(fileName), 5000);
         return;
@@ -411,6 +480,8 @@ void MainWindow::onDelete()
 void MainWindow::toggleFullScreen()
 {
     m_fullscreen = !m_fullscreen;
+    L_DEBUG("切换全屏: {}", m_fullscreen ? "开" : "关");
+    ui.titleBar->setVisible(!m_fullscreen);
     if (m_fullscreen) {
         m_savedGeometry = saveGeometry();
         ui.toolBar->setVisible(false);
@@ -468,7 +539,11 @@ void MainWindow::dropEvent(QDropEvent* e)
 {
     const QList<QUrl> urls = e->mimeData()->urls();
     for (const QUrl& url : urls) {
-        if (url.isLocalFile()) { openFile(url.toLocalFile()); break; }
+        if (url.isLocalFile()) {
+            L_DEBUG("拖放打开: {}", url.toLocalFile().toStdString());
+            openFile(url.toLocalFile());
+            break;
+        }
     }
     e->acceptProposedAction();
 }
@@ -481,6 +556,7 @@ void MainWindow::closeEvent(QCloseEvent* e)
     const QString dir = QFileInfo(m_model.current()).absolutePath();
     if (!dir.isEmpty())
         Settings::setValue("win/lastDir", dir);
+    L_INFO("关窗：持久化几何/面板状态/最后目录 {}", dir.toStdString());
     QMainWindow::closeEvent(e);
 }
 
@@ -493,5 +569,109 @@ void MainWindow::showEvent(QShowEvent* e)
         m_firstShow = false;
         if (!m_winGeometry.isEmpty())
             restoreGeometry(m_winGeometry);
+#ifdef Q_OS_WIN
+        // 首次 show 后 winId 才有真实 HWND；强制一次 NC 重算让 WM_NCCALCSIZE 生效。
+        ::SetWindowPos(reinterpret_cast<HWND>(winId()), nullptr, 0, 0, 0, 0,
+                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+#endif
     }
 }
+
+void MainWindow::changeEvent(QEvent* e)
+{
+    QMainWindow::changeEvent(e);
+    if (e->type() == QEvent::WindowStateChange)
+        ui.btnMax->setText(isMaximized() ? QStringLiteral("❐") : QStringLiteral("□"));
+}
+
+#ifdef Q_OS_WIN
+// 系统标题栏裁掉但 WS_THICKFRAME/WS_CAPTION 样式保留：
+//   WM_NCCALCSIZE → 客户区扩到整窗（最大化时按边框内收，防内容出屏）；
+//   WM_NCHITTEST  → 四边报回 HTLEFT 等补缩放，自定义条报 HTCAPTION，
+//                   于是拖动/双击最大化/Aero Snap/阴影全由系统原生提供。
+bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, long* result)
+{
+    if (eventType == QByteArrayLiteral("windows_generic_MSG"))
+    {
+        MSG* msg = static_cast<MSG*>(message);
+        // 只用 msg->hwnd：在 nativeEvent 里调 winId() 可能触发句柄重建/重入（曾致 TextShaping 回调崩溃）。
+        HWND hwnd = msg->hwnd;
+        const int framePx = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+        const int framePy = GetSystemMetrics(SM_CYSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+
+        switch (msg->message)
+        {
+        case WM_NCCALCSIZE:
+            if (msg->wParam)
+            {
+                NCCALCSIZE_PARAMS* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+                const RECT orig = p->rgrc[0];
+                ::DefWindowProc(hwnd, WM_NCCALCSIZE, msg->wParam, msg->lParam);
+                // 左/右/下沿用默认内收：Win10 窗口矩形在右/下含 ~8px 不可见缩放边框，
+                // 若也扩成客户区，内容会铺出可视边缘 → 窗口右侧/底部出现透明空白条。
+                // 顶部收回窗口顶端（普通态顶缘无出屏；最大化按边框收回，防内容出屏）。
+                p->rgrc[0].top = orig.top + (IsZoomed(hwnd) ? framePy : 0);
+                *result = 0;
+                return true;
+            }
+            break;
+
+        case WM_NCHITTEST:
+        {
+            // 物理屏幕坐标 → MainWindow 逻辑客户区坐标（最大化时客户原点内收一个边框）。
+            const LONG px = GET_X_LPARAM(msg->lParam);
+            const LONG py = GET_Y_LPARAM(msg->lParam);
+            RECT wr;
+            ::GetWindowRect(hwnd, &wr);
+            const bool zoomed = IsZoomed(hwnd) != FALSE;
+            const qreal dpr = windowHandle() ? windowHandle()->devicePixelRatio() : 1.0;
+            // 客户原点的物理偏移：左右恒内收一个边框（见 WM_NCCALCSIZE），顶部仅最大化时内收。
+            const QPoint local(int((px - wr.left  - framePx) / dpr),
+                               int((py - wr.top   - (zoomed ? framePy : 0)) / dpr));
+
+            // 边缘/角缩放优先（顶部 m 像素带压在标题条下面，不先判就摸不到）。
+            if (!zoomed)
+            {
+                const int m = qMax(1, int(framePx / dpr));
+                const bool l = local.x() < m, r = local.x() >= width()  - m;
+                const bool t = local.y() < m, b = local.y() >= height() - m;
+                if (l || r || t || b)
+                {
+                    if      (t && l) *result = HTTOPLEFT;
+                    else if (t && r) *result = HTTOPRIGHT;
+                    else if (b && l) *result = HTBOTTOMLEFT;
+                    else if (b && r) *result = HTBOTTOMRIGHT;
+                    else if (l)      *result = HTLEFT;
+                    else if (r)      *result = HTRIGHT;
+                    else if (t)      *result = HTTOP;
+                    else             *result = HTBOTTOM;
+                    return true;
+                }
+            }
+
+            // 标题栏条带（含最大化态）：按钮区留 HTCLIENT 给 Qt，其余 HTCAPTION。
+            if (ui.titleBar->isVisible() && ui.titleBar->geometry().contains(local))
+            {
+                for (QWidget* btn : { static_cast<QWidget*>(ui.btnMin),
+                                      static_cast<QWidget*>(ui.btnMax),
+                                      static_cast<QWidget*>(ui.btnClose) })
+                {
+                    if (QRect(btn->mapTo(this, QPoint()), btn->size()).contains(local))
+                    {
+                        *result = HTCLIENT;
+                        return true;
+                    }
+                }
+                *result = HTCAPTION;
+                return true;
+            }
+            break;
+        }
+
+        default:
+            break;
+        }
+    }
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+#endif

@@ -2,12 +2,19 @@
 #include <QFileInfo>
 #include "src/MainWindow.h"
 #include "src/SelfTest.h"
+#include "src/Log.h"
 
 int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
+    Log::init();
     QStringList args = app.arguments().mid(1);
-    if (args.contains("--selftest")) return SelfTest::run();
+    L_INFO("启动参数: [{}]", args.join(QLatin1Char(' ')).toStdString());
+    if (args.contains("--selftest")) {
+        const int rc = SelfTest::run();
+        Log::shutdown();
+        return rc;
+    }
     MainWindow w;
     w.resize(1100, 700);
     w.show();
@@ -16,5 +23,8 @@ int main(int argc, char* argv[])
     for (const QString& a : args) {
         if (!a.startsWith('-')) { w.openFile(a); break; }
     }
-    return app.exec();
+    const int rc = app.exec();
+    L_INFO("事件循环退出，code={}", rc);
+    Log::shutdown();
+    return rc;
 }

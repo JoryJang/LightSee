@@ -11,9 +11,11 @@
 #include "src/PreloadCache.h"
 #include "src/RecycleBin.h"
 #include "src/SlideShowController.h"
+#include "src/Log.h"
 #include <QCoreApplication>
 #include <QGraphicsScene>
 #include <QLabel>
+#include <QPushButton>
 #include <QImageReader>
 #include <QImage>
 #include <QFileInfo>
@@ -27,8 +29,9 @@
 
 static int g_fail = 0;
 #define CHECK(cond, name) do { \
-    std::printf("%s  %s\n", (cond) ? "PASS" : "FAIL", name); \
-    if (!(cond)) ++g_fail; } while (0)
+    const bool ok__ = (cond); \
+    std::printf("%s  %s\n", ok__ ? "PASS" : "FAIL", name); \
+    if (ok__) { L_DEBUG("PASS  {}", name); } else { ++g_fail; L_WARN("FAIL  {}", name); } } while (0)
 
 // Calibrated against a known-good libde265 decode of third_party/testdata/example.heic
 // (the Sigmaringen Danube photo). The MSVC /O2 miscompile of libde265 1.0.15 produced a
@@ -36,13 +39,14 @@ static int g_fail = 0;
 // 4954224778; the correct decode has greenFrac ~0.00 and checksum 5259168035.
 int SelfTest::run()
 {
+    L_INFO("==== LightSee 自检开始 ====");
     const QString sample = QCoreApplication::applicationDirPath()
                            + "/../../third_party/testdata/example.heic";
     QImageReader r(sample);
     QImage img = r.read();
 
     CHECK(!img.isNull(), "heic: qheif plugin decodes example.heic (non-null)");
-    if (img.isNull()) return g_fail;
+    if (img.isNull()) { L_ERROR("自检中止：example.heic 解码失败 ({})", sample.toStdString()); return g_fail; }
     CHECK(img.size() == QSize(1280, 854), "heic: decoded size is exactly 1280x854");
 
     const QImage rgb = img.convertToFormat(QImage::Format_RGB888);
@@ -252,8 +256,16 @@ int SelfTest::run()
     }
 
     // --- dark.qss 状态栏文字可读性（回归：常驻 QLabel 曾实测拿到黑色 windowText） ---
+    // 用裸 QMainWindow 且在子控件创建前设表：既避开用户可改的 ui/theme 持久设置，
+    // 也避开运行时换表才涉及的 polish 缓存问题（light 用例同理）。
     {
-        MainWindow probe;
+        QMainWindow probe;
+        QFile qss(QStringLiteral(":/dark.qss"));
+        // CHECK 对条件求值两次：open() 有副作用（第二次会因"已打开"返回 false），先折叠成 bool。
+        const bool darkOpen = qss.open(QIODevice::ReadOnly);
+        CHECK(darkOpen, "dark: resource :/dark.qss exists");
+        if (!qss.isOpen()) { L_ERROR("自检中止：:/dark.qss 资源缺失"); return g_fail; }
+        probe.setStyleSheet(QString::fromUtf8(qss.readAll()));
         probe.resize(500, 100);
         // 复刻主窗口用法：常驻 QLabel + 临时消息，均须为浅色文字（深底 #232428 上黑色不可读）。
         auto* lbl = new QLabel(QStringLiteral("1920\u00D71080"), &probe);
@@ -268,5 +280,40 @@ int SelfTest::run()
               "qss: statusbar message & permanent label text are legible (light)");
     }
 
+    // --- light.qss 状态栏文字可读性（浅底上必须为深色文字） ---
+    // 注：用裸 QMainWindow 且在子控件创建前设表 —— 与 dark 用例同构。
+    // 运行时换已有样式的窗口靠 polish 事件（需真实事件循环 + 可见控件），不在本用例范围。
+    {
+        QMainWindow probe;
+        QFile qss(QStringLiteral(":/light.qss"));
+        const bool lightOpen = qss.open(QIODevice::ReadOnly);   // 同上：折叠副作用，避免二次 open()
+        CHECK(lightOpen, "light: resource :/light.qss exists");
+        if (!qss.isOpen()) { L_ERROR("自检中止：:/light.qss 资源缺失"); return g_fail; }   // 资源缺失时 palette 检查无意义
+        probe.setStyleSheet(QString::fromUtf8(qss.readAll()));
+        auto* lbl = new QLabel(QStringLiteral("1920\u00D71080"), &probe);
+        probe.statusBar()->addPermanentWidget(lbl);
+        probe.ensurePolished();
+        lbl->ensurePolished();
+        const QColor lb = lbl->palette().windowText().color();
+        std::printf("  light-qss: label windowText=rgb(%d,%d,%d)\n",
+                    lb.red(), lb.green(), lb.blue());
+        CHECK(lb == QColor("#55585e"),
+              "light qss: statusbar label text = #55585e (dark on light)");
+    }
+
+    // --- 自定义标题栏：三键+标题存在，且已被 setMenuWidget 重挂为主窗口直接子级 ---
+    {
+        MainWindow probe;
+        QPushButton* bMin   = probe.findChild<QPushButton*>("btnMin");
+        QPushButton* bMax   = probe.findChild<QPushButton*>("btnMax");
+        QPushButton* bClose = probe.findChild<QPushButton*>("btnClose");
+        QWidget* tb         = probe.findChild<QWidget*>("titleBar");
+        CHECK(bMin && bMax && bClose && probe.findChild<QLabel*>("lblTitle"),
+              "titlebar: caption buttons and title label exist");
+        CHECK(tb && tb->parent() == &probe,
+              "titlebar: installed as menu-area widget (direct child of MainWindow)");
+    }
+
+    L_INFO("==== 自检结束：失败 {} 项 ====", g_fail);
     return g_fail;
 }

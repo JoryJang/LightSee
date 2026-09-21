@@ -1,4 +1,5 @@
 #include "src/ImageView.h"
+#include "src/Log.h"
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
 #include <QWheelEvent>
@@ -47,6 +48,7 @@ void ImageView::setBackgroundMode(Background mode)
 
 void ImageView::setImage(const QImage& img)
 {
+    L_DEBUG("画布显示图像: {}x{}", img.width(), img.height());
     m_scene->clear();
     m_item = m_scene->addPixmap(QPixmap::fromImage(img));
     m_item->setTransformationMode(Qt::SmoothTransformation);
@@ -57,6 +59,7 @@ void ImageView::setImage(const QImage& img)
 
 void ImageView::clearImage()
 {
+    L_DEBUG("画布清空");
     m_scene->clear();
     m_item = nullptr;
 }

@@ -1,4 +1,5 @@
 #include "src/FolderModel.h"
+#include "src/Log.h"
 #include <QDir>
 #include <QFileInfo>
 #include <QSet>
@@ -18,6 +19,7 @@ QString FolderModel::firstSupportedFile(const QString& dirPath)
     for (const QFileInfo& e : list)
         if (exts.contains(e.suffix().toLower()))
             return e.absoluteFilePath();
+    L_DEBUG("目录内无受支持图片: {}", dirPath.toStdString());
     return QString();
 }
 
@@ -37,6 +39,10 @@ bool FolderModel::setPath(const QString& filePath)
         if (exts.contains(e.suffix().toLower()))
             m_files << e.absoluteFilePath();
     m_index = m_files.indexOf(fi.absoluteFilePath());
+    if (m_index < 0)
+        L_DEBUG("setPath 未命中: {} 不在目录可打开列表", filePath.toStdString());
+    else
+        L_DEBUG("目录就绪: {} 共 {} 个受支持文件，当前第 {} 个", fi.absolutePath().toStdString(), m_files.size(), m_index + 1);
     return m_index >= 0;
 }
 
@@ -52,8 +58,9 @@ QString FolderModel::prev()
 void FolderModel::removeFile(const QString& filePath)
 {
     const int i = m_files.indexOf(filePath);
-    if (i < 0) return;
+    if (i < 0) { L_WARN("removeFile 未找到条目: {}", filePath.toStdString()); return; }
     m_files.removeAt(i);
     if (i < m_index) --m_index;
     else if (i == m_index) m_index = m_files.isEmpty() ? -1 : qMin(i, m_files.size() - 1);
+    L_DEBUG("模型移除后剩余 {} 项，当前索引 {}", m_files.size(), m_index);
 }

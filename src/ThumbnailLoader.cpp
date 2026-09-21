@@ -1,4 +1,5 @@
 #include "src/ThumbnailLoader.h"
+#include "src/Log.h"
 #include <QListWidget>
 #include <QImageReader>
 #include <QFileInfo>
@@ -18,6 +19,8 @@ static QPixmap renderThumb(const QString& path)
                         : QSize(t.width(), s.height() * t.width() / s.width()));
     }
     const QImage img = r.read();
+    if (img.isNull())
+        L_DEBUG("缩略图解码失败: {}（{}）", path.toStdString(), r.errorString().toStdString());
     return img.isNull() ? QPixmap() : QPixmap::fromImage(img);
 }
 
@@ -28,6 +31,7 @@ void ThumbnailLoader::cancel() { ++m_gen; }
 void ThumbnailLoader::populate(QListWidget* target, const QStringList& paths)
 {
     cancel();
+    L_DEBUG("缩略图面板刷新: {} 项", paths.size());
     const quint64 gen = m_gen;
     target->clear();
     int row = 0;

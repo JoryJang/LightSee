@@ -6,6 +6,7 @@
 #include <shellapi.h>
 
 #include "src/RecycleBin.h"   // QString
+#include "src/Log.h"
 #include <QDir>               // isAbsolutePath：守卫只接受绝对路径
 #include <QVector>            // 堆上缓冲，长度按实际字符串分配
 
@@ -13,6 +14,7 @@ bool RecycleBin::moveToRecycleBin(const QString& path, QString* errorOut)
 {
     if (path.isEmpty()) {
         if (errorOut) *errorOut = QStringLiteral("empty path");
+        L_WARN("回收站拒绝：空路径");
         return false;
     }
 
@@ -21,12 +23,14 @@ bool RecycleBin::moveToRecycleBin(const QString& path, QString* errorOut)
     // 承诺的是回收站。故在进入 SHFileOperation 之前直接拒绝。
     if (!QDir::isAbsolutePath(path)) {
         if (errorOut) *errorOut = QStringLiteral("not an absolute path");
+        L_WARN("回收站拒绝（非绝对路径）: {}", path.toStdString());
         return false;
     }
     const bool uncStyle = path.startsWith(QStringLiteral("\\\\"))    // \\server\share
                        || path.startsWith(QStringLiteral("//"));     // Qt 正斜杠形式 //server/share
     if (uncStyle) {
         if (errorOut) *errorOut = QStringLiteral("network path has no recycle bin");
+        L_WARN("回收站拒绝（UNC 网络路径）: {}", path.toStdString());
         return false;
     }
     if (path.size() >= 2 && path.at(1) == QLatin1Char(':')) {        // 盘符形式 X:\ 或 X:/
@@ -36,6 +40,7 @@ bool RecycleBin::moveToRecycleBin(const QString& path, QString* errorOut)
         const UINT driveType = GetDriveTypeW(root);
         if (driveType == DRIVE_REMOTE || driveType == DRIVE_NO_ROOT_DIR) {
             if (errorOut) *errorOut = QStringLiteral("network path has no recycle bin");
+            L_WARN("回收站拒绝（映射盘/无效盘符）: {}", path.toStdString());
             return false;
         }
     }
@@ -58,11 +63,13 @@ bool RecycleBin::moveToRecycleBin(const QString& path, QString* errorOut)
     const int rc = SHFileOperationW(&op);
     if (rc != 0) {
         if (errorOut) *errorOut = QString::number(rc);
+        L_WARN("SHFileOperationW 删除失败: {} rc={}", path.toStdString(), rc);
         return false;
     }
     // rc==0 但操作被中止的情况（例如回收站策略拒绝）：视为失败，交由调用方提示。
     if (op.fAnyOperationsAborted != FALSE) {
         if (errorOut) *errorOut = QStringLiteral("aborted");
+        L_WARN("SHFileOperationW 被中止: {}", path.toStdString());
         return false;
     }
     return true;
