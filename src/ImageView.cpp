@@ -6,6 +6,9 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QBrush>
+#include <QToolButton>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
 #include <cmath>
 
 ImageView::ImageView(QWidget* parent) : QGraphicsView(parent)
@@ -19,6 +22,113 @@ ImageView::ImageView(QWidget* parent) : QGraphicsView(parent)
     setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     setFrameShape(QFrame::NoFrame);
     setBackgroundBrush(QColor(0x1e, 0x1f, 0x22));
+    createOverlayButtons();
+    viewport()->installEventFilter(this);
+}
+
+// 悬浮翻页按钮：圆形半透明白底 + 自绘箭头（与参考图一致），父对象是 viewport，
+// 因此位置始终相对视口、不会被滚进场景；Enter/Leave 事件在 eventFilter 里统一处理。
+static QIcon chevronIcon(bool left, int size)
+{
+    // 注意：不要用 setDevicePixelRatio 的高分 pixmap —— 5.14 的 QStyleSheetStyle
+    // 画图标时按物理尺寸裁剪 DPR pixmap，会只剩箭头一角；1:1 绘制最稳。
+    QPixmap pm(size, size);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    QPen pen(QColor(0x55, 0x57, 0x5a), 2);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    p.setPen(pen);
+    const double xIn = size * 0.35, xOut = size * 0.65;
+    const double y0 = size * 0.25, yM = size * 0.52, y1 = size * 0.79;
+    if (left) p.drawPolyline(QVector<QPointF>{ {xOut, y0}, {xIn, yM}, {xOut, y1} });
+    else      p.drawPolyline(QVector<QPointF>{ {xIn, y0}, {xOut, yM}, {xIn, y1} });
+    p.end();
+    return QIcon(pm);
+}
+
+void ImageView::createOverlayButtons()
+{
+    const auto make = [this](bool left) {
+        auto* b = new QToolButton(viewport());
+        b->setIcon(chevronIcon(left, 30));
+        b->setIconSize(QSize(30, 30));
+        b->setFixedSize(56, 56);
+        b->setCursor(Qt::PointingHandCursor);
+        b->setFocusPolicy(Qt::NoFocus);
+        b->setToolTip(left ? QStringLiteral("上一张") : QStringLiteral("下一张"));
+        b->setStyleSheet(
+            "QToolButton { background-color: rgba(255,255,255,200);"
+            " border: 1px solid rgba(0,0,0,25); border-radius: 28px; }"
+            "QToolButton:hover { background-color: rgba(255,255,255,238); }"
+            "QToolButton:pressed { background-color: rgba(216,220,226,238); }");
+        auto* eff = new QGraphicsOpacityEffect(b);
+        eff->setOpacity(0.0);
+        b->setGraphicsEffect(eff);
+        b->hide();
+        connect(b, &QToolButton::clicked,
+                this, left ? &ImageView::prevRequested : &ImageView::nextRequested);
+        return b;
+    };
+    m_btnPrev = make(true);
+    m_btnNext = make(false);
+    m_overlayAnim = new QPropertyAnimation(this, "overlayOpacity", this);
+    m_overlayAnim->setDuration(180);
+    m_overlayAnim->setEasingCurve(QEasingCurve::OutCubic);
+    connect(m_overlayAnim, &QPropertyAnimation::finished, this, [this] {
+        if (!m_overlayShown)
+            for (QToolButton* b : { m_btnPrev, m_btnNext }) b->hide();
+    });
+}
+
+void ImageView::setOverlayVisible(bool on)
+{
+    if (m_overlayShown == on) return;
+    m_overlayShown = on;
+    m_overlayAnim->stop();
+    if (on) {
+        repositionOverlayButtons();
+        for (QToolButton* b : { m_btnPrev, m_btnNext }) b->show();
+    }
+    m_overlayAnim->setStartValue(m_overlayOpacity);
+    m_overlayAnim->setEndValue(on ? 1.0 : 0.0);
+    m_overlayAnim->start();
+}
+
+void ImageView::setOverlayOpacity(double o)
+{
+    m_overlayOpacity = qBound(0.0, o, 1.0);
+    for (QToolButton* b : { m_btnPrev, m_btnNext })
+        static_cast<QGraphicsOpacityEffect*>(b->graphicsEffect())->setOpacity(m_overlayOpacity);
+}
+
+void ImageView::repositionOverlayButtons()
+{
+    if (!m_btnPrev) return;
+    const int margin = 16;
+    const int y = (viewport()->height() - m_btnPrev->height()) / 2;
+    m_btnPrev->move(margin, y);
+    m_btnNext->move(viewport()->width() - m_btnNext->width() - margin, y);
+}
+
+bool ImageView::eventFilter(QObject* obj, QEvent* e)
+{
+    if (obj == viewport()) {
+        switch (e->type()) {
+        case QEvent::Enter:
+            if (m_item) setOverlayVisible(true);
+            break;
+        case QEvent::Leave:
+            setOverlayVisible(false);
+            break;
+        case QEvent::Resize:
+            repositionOverlayButtons();
+            break;
+        default: break;
+        }
+    }
+    return QGraphicsView::eventFilter(obj, e);
 }
 
 // Task 7：16px 双灰棋盘贴砖。Qt 5.14 中 QGraphicsView::drawBackground 用
@@ -55,6 +165,8 @@ void ImageView::setImage(const QImage& img)
     applyItemTransform();   // 内含 sceneRect 收缩到当前图（大图后小图不残留滚动条）
     // 切图统一回到"适应窗口 + 居中"，不沿用上一张的缩放/平移状态。
     fitToWindow();
+    // 连续翻页时鼠标未离开画布，保持按钮可见（Enter 不会再触发）
+    if (m_item && viewport()->underMouse()) setOverlayVisible(true);
 }
 
 void ImageView::clearImage()
@@ -62,6 +174,7 @@ void ImageView::clearImage()
     L_DEBUG("画布清空");
     m_scene->clear();
     m_item = nullptr;
+    setOverlayVisible(false);
 }
 
 void ImageView::fitToWindow()
