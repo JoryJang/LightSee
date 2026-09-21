@@ -18,8 +18,9 @@ ImageView::ImageView(QWidget* parent) : QGraphicsView(parent)
     setRenderHints(QPainter::SmoothPixmapTransform | QPainter::Antialiasing);
     setTransformationAnchor(AnchorUnderMouse);
     setDragMode(ScrollHandDrag);
-    setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    // 滚动条隐藏（像常规看图软件）；ScrollHandDrag 走 scrollbar setValue，不依赖控件可见
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setFrameShape(QFrame::NoFrame);
     setBackgroundBrush(QColor(0x1e, 0x1f, 0x22));
     createOverlayButtons();
@@ -232,12 +233,18 @@ void ImageView::wheelEvent(QWheelEvent* e)
     e->accept();
 }
 
-// final-fix B2b：鼠标侧键翻页（spec §5）。Back/Forward 消费掉；
-// 其余按键（含 LeftButton 的 ScrollHandDrag 平移）交回基类。
+// final-fix B2b：鼠标侧键翻页（spec §5）。左键拖拽中压到侧键不翻页（握持发力易误触），
+// 吞掉事件让拖拽继续；松开后的侧键单击照常翻页。
 void ImageView::mousePressEvent(QMouseEvent* e)
 {
-    if (e->button() == Qt::BackButton) { emit prevRequested(); e->accept(); return; }
-    if (e->button() == Qt::ForwardButton) { emit nextRequested(); e->accept(); return; }
+    if (e->button() == Qt::BackButton || e->button() == Qt::ForwardButton) {
+        if (!(e->buttons() & Qt::LeftButton)) {
+            if (e->button() == Qt::BackButton) emit prevRequested();
+            else                               emit nextRequested();
+        }
+        e->accept();
+        return;
+    }
     QGraphicsView::mousePressEvent(e);
 }
 
@@ -255,4 +262,12 @@ void ImageView::resizeEvent(QResizeEvent* e)
 {
     QGraphicsView::resizeEvent(e);
     if (m_fitMode) fitToWindow();
+}
+
+// viewport 滚动（拖拽平移/滚轮缩放）经 QWidget::scroll 连带平移其子控件，
+// 悬浮翻页按钮会被拖走；每次滚动后摆回固定视口位置。
+void ImageView::scrollContentsBy(int dx, int dy)
+{
+    QGraphicsView::scrollContentsBy(dx, dy);
+    repositionOverlayButtons();
 }

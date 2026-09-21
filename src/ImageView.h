@@ -33,6 +33,7 @@ protected:
     void mousePressEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
     void resizeEvent(QResizeEvent* e) override;
+    void scrollContentsBy(int dx, int dy) override;
     bool eventFilter(QObject* obj, QEvent* e) override;
 private:
     void createOverlayButtons();
