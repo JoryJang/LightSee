@@ -1,0 +1,14 @@
+QMainWindow { background: #17181a; }
+QToolBar { background: #232428; border: none; padding: 4px; spacing: 2px; }
+QToolBar QToolButton { color: #d8d9db; background: transparent; border-radius: 6px;
+                       padding: 5px 9px; font-size: 13px; }
+QToolBar QToolButton:hover { background: #34363c; }
+QToolBar QToolButton:pressed { background: #2b2d32; }
+QToolBar QToolButton:checked { background: #0a84ff; color: white; }
+QStatusBar { background: #232428; color: #b9bbc0; }
+QListWidget#thumbPanel { background: #1c1d20; border: none; }
+QListWidget#thumbPanel::item { color: #c9cace; border-radius: 6px; padding: 4px; }
+QListWidget#thumbPanel::item:hover { background: #2b2d32; }
+QListWidget#thumbPanel::item:selected { background: #0a84ff; color: white; }
+QGraphicsView#canvas { background: #17181a; }
+QToolTip { background: #2b2d32; color: #e6e7e9; border: 1px solid #3f4147; }

@@ -1,0 +1,497 @@
+#include "src/MainWindow.h"
+#include "src/ThumbnailLoader.h"
+#include "src/Settings.h"
+#include "src/RecycleBin.h"
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QImageReader>
+#include <QtConcurrentRun>
+#include <QFutureWatcher>
+#include <QCloseEvent>
+#include <QShowEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QUrl>
+#include <QLabel>
+#include <QKeyEvent>
+#include <QMessageBox>
+#include <QMenu>
+#include <QDir>
+#include <QDateTime>
+#include <QFile>
+
+static QImage decodeImage(const QString& path)
+{
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    return reader.read();
+}
+
+// Task 7：预加载 worker。按值捕获 shared_ptr 副本 + path 拷贝，只写缓存、
+// 绝不触碰 MainWindow —— 窗口析构后 worker 照常安全收尾（见 PreloadCache.h）。
+static void preloadInto(std::shared_ptr<PreloadCache> cache, const QString path)
+{
+    cache->put(path, decodeImage(path));
+}
+
+static QString humanSize(qint64 bytes)
+{
+    if (bytes >= 1024LL * 1024)
+        return QString::number(bytes / (1024.0 * 1024.0), 'f', 2) + " MB";
+    if (bytes >= 1024)
+        return QString::number(bytes / 1024.0, 'f', 1) + " KB";
+    return QString::number(bytes) + " B";
+}
+
+// Task 6：HEIC 家族后缀（解码依赖 qheif 插件 + heif.dll/libde265.dll 部署）。
+static bool isHeicSuffix(const QString& path)
+{
+    const QString s = QFileInfo(path).suffix().toLower();
+    return s == QLatin1String("heic") || s == QLatin1String("heif") || s == QLatin1String("hif");
+}
+
+MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
+{
+    ui.setupUi(this);
+
+    // Task 8：现代深色样式（rcc 资源 :/dark.qss）。资源缺失时正常以默认样式运行。
+    QFile qss(":/dark.qss");
+    if (qss.open(QIODevice::ReadOnly))
+        setStyleSheet(QString::fromUtf8(qss.readAll()));
+
+    // Task 7：启动状态恢复。actPanel 的 setChecked 放在 toggled connect 之前
+    // ——恢复不触发 onTogglePanel，避免 populate 风暴（brief 允许 blockSignals 或先设再连，取后者）。
+    {
+        const bool panelOn = Settings::value("view/thumbPanel", false).toBool();
+        ui.thumbPanel->setVisible(panelOn);        // 面板显隐由 actPanel 控制（Task 4 语义）
+        ui.actPanel->setChecked(panelOn);
+    }
+    m_winGeometry = Settings::value("win/geometry").toByteArray();
+    if (!m_winGeometry.isEmpty())
+        restoreGeometry(m_winGeometry);            // 构造期先套一次；首次 showEvent 再套一次（防 main.cpp resize 覆盖）
+
+    m_cache = std::make_shared<PreloadCache>();
+    setAcceptDrops(true);
+
+    m_thumbs = new ThumbnailLoader(this);
+
+    // Task 7：画布背景三档（读档应用）+ 右键菜单（显式 connect customContextMenuRequested）。
+    const int bgIdx = Settings::value("view/bgMode", int(ImageView::Dark)).toInt();
+    m_bgMode = (bgIdx >= 0 && bgIdx <= int(ImageView::Checker))
+                   ? ImageView::Background(bgIdx) : ImageView::Dark;
+    ui.canvas->setBackgroundMode(m_bgMode);
+    ui.canvas->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(ui.canvas, &QGraphicsView::customContextMenuRequested,
+            this, &MainWindow::onCanvasMenu);
+
+    // 状态栏右侧常驻信息（分辨率 · 文件大小 / 缩放 / 播放状态）。属于运行时 helper 控件，非布局。
+    m_lblInfo = new QLabel(this);
+    m_lblZoom = new QLabel(this);
+    m_lblSlide = new QLabel(tr("▶ 播放中"), this);
+    m_lblSlide->setVisible(false);
+    ui.statusBar->addPermanentWidget(m_lblInfo);
+    ui.statusBar->addPermanentWidget(m_lblZoom);
+    ui.statusBar->addPermanentWidget(m_lblSlide);
+
+    connect(ui.actOpen,     &QAction::triggered, this, &MainWindow::onOpen);
+    connect(ui.actPrev,     &QAction::triggered, this, &MainWindow::onPrev);
+    connect(ui.actNext,     &QAction::triggered, this, &MainWindow::onNext);
+    connect(ui.actFit,      &QAction::triggered, this, &MainWindow::onFit);
+    connect(ui.actActual,   &QAction::triggered, this, &MainWindow::onActual);
+    connect(ui.actZoomIn,   &QAction::triggered, this, &MainWindow::onZoomIn);
+    connect(ui.actZoomOut,  &QAction::triggered, this, &MainWindow::onZoomOut);
+    connect(ui.actRotateL,  &QAction::triggered, this, &MainWindow::onRotateLeft);
+    connect(ui.actRotateR,  &QAction::triggered, this, &MainWindow::onRotateRight);
+    connect(ui.actFlipH,    &QAction::triggered, this, &MainWindow::onFlipH);
+    connect(ui.actFlipV,    &QAction::triggered, this, &MainWindow::onFlipV);
+    connect(ui.actPanel,    &QAction::toggled,   this, &MainWindow::onTogglePanel);
+    connect(ui.actInfo,     &QAction::triggered, this, &MainWindow::onInfo);
+    connect(ui.canvas,      &ImageView::zoomChanged, this, &MainWindow::onZoomChanged);
+    // final-fix B2b：鼠标侧键翻页（ImageView::mousePressEvent 发信号，显式 connect）。
+    connect(ui.canvas,      &ImageView::prevRequested, this, &MainWindow::onPrev);
+    connect(ui.canvas,      &ImageView::nextRequested, this, &MainWindow::onNext);
+
+    // Task 5：幻灯片与全屏。全部显式 connect，不依赖 on_<widget>_<signal> 自动连接命名。
+    connect(ui.actSlide,    &QAction::toggled,   this, &MainWindow::onSlideToggled);
+    connect(&m_slide,       &SlideShowController::tick, this, &MainWindow::onNext);
+
+    // Task 6：删除进回收站。显式 connect（actDelete 在 Viewer.ui 中未声明 shortcut，
+    // Delete 键只在 keyPressEvent 里绑定一次 → 不存在双触发）。
+    connect(ui.actDelete,   &QAction::triggered, this, &MainWindow::onDelete);
+
+    // 显式 connect：点击缩略图切换。context object = this，MainWindow 析构后 lambda 不再触发，
+    // 捕获 this 不会悬垂。
+    connect(ui.thumbPanel, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
+        if (!item) return;
+        const QString path = item->data(Qt::UserRole).toString();
+        if (!path.isEmpty() && m_model.setPath(path)) { rebuildThumbPanel(); showCurrent(); }
+    });
+
+    updateActionStates();   // Task 7：启动即无图 → prev/next/slide/delete 禁用
+}
+
+void MainWindow::onOpen()
+{
+    // Task 7：初始目录优先用上次关窗时保存的 win/lastDir（无效则回落 home）。
+    static QString dir = [] {
+        const QString saved = Settings::value("win/lastDir").toString();
+        return (!saved.isEmpty() && QDir(saved).exists()) ? saved : QDir::homePath();
+    }();
+    const QString path = QFileDialog::getOpenFileName(this, tr("打开图片"), dir,
+        tr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff *.ico *.svg *.heic *.heif *.hif);;所有文件 (*)"));
+    if (!path.isEmpty()) { dir = QFileInfo(path).absolutePath(); openFile(path); }
+}
+
+// final-fix I1+I2：统一入口（openFile / dropEvent / main.cpp CLI 共用此路径）。
+// 目录 → 解析为首个受支持图片（spec §5 "拖拽文件/文件夹"）；
+// 路径不存在 / 目录无图 / setPath 失败 → 状态栏提示并回空态（spec §7）。
+void MainWindow::openFile(const QString& path)
+{
+    QString target = path;
+    if (QFileInfo(path).isDir())
+        target = FolderModel::firstSupportedFile(path);
+    if (target.isEmpty() || !m_model.setPath(target)) {
+        ui.statusBar->showMessage(tr("无法打开：%1").arg(path), 5000);
+        updateActionStates();
+        return;
+    }
+    rebuildThumbPanel();
+    showCurrent();
+}
+
+void MainWindow::showCurrent()
+{
+    const QString path = m_model.current();
+    if (path.isEmpty()) return;
+    startLoad(path);
+    const int idx = m_model.index();
+    const int total = m_model.files().size();
+    ui.thumbPanel->setCurrentRow(idx);
+    if (auto* it = ui.thumbPanel->item(idx)) ui.thumbPanel->scrollToItem(it);
+    setWindowTitle(tr("%1 (%2/%3) - LightSee 看图")
+        .arg(QFileInfo(path).fileName()).arg(idx + 1).arg(total));
+}
+
+void MainWindow::rebuildThumbPanel()
+{
+    // 懒加载：面板可见时才 populate；setPath 后可见则立即重建。
+    if (ui.thumbPanel->isVisible())
+        m_thumbs->populate(ui.thumbPanel, m_model.files());
+}
+
+void MainWindow::onNext()
+{
+    if (m_model.files().isEmpty()) return;
+    if (!m_model.next().isEmpty()) showCurrent();
+}
+
+void MainWindow::onPrev()
+{
+    if (m_model.files().isEmpty()) return;
+    if (!m_model.prev().isEmpty()) showCurrent();
+}
+
+void MainWindow::startLoad(const QString& path)
+{
+    m_currentPath = path;
+    ++m_loadSeq;
+
+    // Task 7：命中预加载缓存 → 立即上屏。m_loadSeq 已 bump，先前启动的在途
+    // watcher 结果会因 seq 不符被丢弃，不会覆盖本次画面（brief 要求的防竞态）。
+    QImage cached;
+    if (m_cache->get(path, &cached)) {
+        onLoadFinished(path, cached);
+        return;
+    }
+
+    const quint64 seq = m_loadSeq;
+    auto* w = new QFutureWatcher<QImage>(this);
+    connect(w, &QFutureWatcher<QImage>::finished, this, [this, w, seq, path]() {
+        const QImage img = w->result();
+        w->deleteLater();
+        if (seq == m_loadSeq) onLoadFinished(path, img);
+    });
+    w->setFuture(QtConcurrent::run(&decodeImage, path));
+    ui.statusBar->showMessage(tr("正在加载 %1 …").arg(QFileInfo(path).fileName()));
+}
+
+// Task 7：成功上屏后对相邻两张 fire-and-forget 预解码。
+// 注意不能调用 m_model.next()/prev() —— 它们会移动索引；改用 files()+index()
+// 环形取模自行窥视（与 FolderModel 的环绕语义一致）。
+void MainWindow::preloadNeighbors()
+{
+    const QStringList files = m_model.files();
+    const int i = m_model.index();
+    const int n = files.size();
+    if (n == 0 || i < 0 || i >= n) return;
+    const QString paths[2] = { files[(i + 1) % n], files[(i - 1 + n) % n] };
+    for (const QString& p : paths) {
+        if (p.isEmpty() || m_cache->contains(p)) continue;   // 已缓存不重复解码
+        QtConcurrent::run(&preloadInto, m_cache, p);         // worker 只持 shared_ptr 副本，见 PreloadCache.h
+    }
+}
+
+// Task 7：无图状态（启动、末图删空）统一禁用；有图（onLoadFinished 到达）恢复。
+void MainWindow::updateActionStates()
+{
+    const bool hasImage = !m_model.current().isEmpty();
+    ui.actPrev->setEnabled(hasImage);
+    ui.actNext->setEnabled(hasImage);
+    ui.actSlide->setEnabled(hasImage);
+    ui.actDelete->setEnabled(hasImage);
+}
+
+void MainWindow::onLoadFinished(const QString& path, const QImage& img)
+{
+    if (img.isNull()) {
+        ui.statusBar->showMessage(tr("%1 无法读取（已跳过记录）").arg(QFileInfo(path).fileName()));
+        ui.canvas->clearImage();
+        if (m_lblInfo) m_lblInfo->clear();
+        // Task 6：HEIC 解码失败 → 给出一次性的部署完整性提示（其他格式不受影响）。
+        maybeWarnHeicUnavailable(path);
+        updateActionStates();   // Task 7：坏图仍允许 prev/next 走开，不置灰
+        return;
+    }
+    ui.canvas->setImage(img);
+    const QFileInfo fi(path);
+    ui.statusBar->clearMessage();
+    if (m_lblInfo)
+        m_lblInfo->setText(tr("%1×%2 · %3").arg(img.width()).arg(img.height()).arg(humanSize(fi.size())));
+    updateActionStates();       // Task 7：有图上屏 → 恢复动作可用
+    preloadNeighbors();         // Task 7：预解码相邻两张（命中缓存的路径直接跳过）
+}
+
+void MainWindow::maybeWarnHeicUnavailable(const QString& path)
+{
+    if (m_heicWarnShown || !isHeicSuffix(path)) return;
+    m_heicWarnShown = true;   // 本次会话只弹一次，避免连续翻看 HEIC 时反复打断
+    QMessageBox::warning(this, tr("无法解码 HEIC"),
+        tr("无法解码 HEIC。请确认 exe 目录下存在 heif.dll/libde265.dll "
+           "且 imageformats\\qheif.dll 已部署。"));
+}
+
+void MainWindow::onFit()    { ui.canvas->fitToWindow(); }
+void MainWindow::onActual() { ui.canvas->setActualSize(); }
+void MainWindow::onZoomIn() { ui.canvas->zoomBy(1.25); }
+void MainWindow::onZoomOut(){ ui.canvas->zoomBy(0.8); }
+void MainWindow::onRotateLeft()  { ui.canvas->rotateBy(-90); }
+void MainWindow::onRotateRight() { ui.canvas->rotateBy(90); }
+void MainWindow::onFlipH()  { ui.canvas->flipHorizontal(); }
+void MainWindow::onFlipV()  { ui.canvas->flipVertical(); }
+
+void MainWindow::onTogglePanel()
+{
+    ui.thumbPanel->setVisible(ui.actPanel->isChecked());
+    if (ui.actPanel->isChecked()) rebuildThumbPanel();
+}
+
+void MainWindow::onZoomChanged(double f)
+{
+    if (m_lblZoom) m_lblZoom->setText(tr("缩放 %1%").arg(qRound(f * 100.0)));
+}
+
+void MainWindow::onInfo()
+{
+    const QString path = m_currentPath.isEmpty() ? m_model.current() : m_currentPath;
+    if (path.isEmpty()) { QMessageBox::information(this, tr("图片信息"), tr("当前没有打开的图片。")); return; }
+
+    const QFileInfo fi(path);
+    QImageReader r(path);
+    const QSize dim = r.size();
+
+    // 格式：QImageReader::supportedImageFormats 命中当前后缀
+    const QByteArray suf = fi.suffix().toLower().toLatin1();
+    QString fmt = fi.suffix().toUpper();
+    const QList<QByteArray> supported = QImageReader::supportedImageFormats();
+    for (const QByteArray& f : supported)
+        if (f.toLower() == suf) { fmt = QString::fromLatin1(f).toUpper(); break; }
+
+    const QString text = tr("文件名：%1\n完整路径：%2\n格式：%3\n尺寸：%4×%5\n文件大小：%6\n修改时间：%7")
+        .arg(fi.fileName(), fi.absoluteFilePath(), fmt)
+        .arg(dim.width()).arg(dim.height())
+        .arg(humanSize(fi.size()), fi.lastModified().toString("yyyy-MM-dd hh:mm:ss"));
+    QMessageBox::about(this, tr("图片信息"), text);
+}
+
+void MainWindow::onSlideToggled(bool on)
+{
+    if (on)
+        m_slide.start(Settings::value("slide/intervalMs", 3000).toInt());
+    else
+        m_slide.stop();
+    if (m_lblSlide) m_lblSlide->setVisible(on);   // Task 7：播放中常驻 "▶ 播放中"
+}
+
+// Task 7：画布右键菜单（customContextMenuRequested 显式 connect 进来）。
+// 菜单项是代码内 QMenu/Action，非布局重建，不违反 .ui 规则。
+void MainWindow::onCanvasMenu(const QPoint& pos)
+{
+    QMenu menu(this);
+
+    QMenu* bgMenu = menu.addMenu(tr("画布背景"));
+    QList<QAction*> bgActs;
+    bgActs << bgMenu->addAction(tr("深色")) << bgMenu->addAction(tr("浅色"))
+           << bgMenu->addAction(tr("棋盘格"));
+    for (int i = 0; i < bgActs.size(); ++i) {
+        QAction* a = bgActs[i];
+        a->setCheckable(true);
+        a->setData(i);
+        a->setChecked(i == int(m_bgMode));
+    }
+
+    QMenu* intervalMenu = menu.addMenu(tr("幻灯片间隔"));
+    // 无需 QActionGroup：QMenu::exec 是模态的，点击任一项即关窗，不存在两项同选中的窗口期。
+    const int curMs = Settings::value("slide/intervalMs", 3000).toInt();
+    for (int s = 1; s <= 10; ++s) {
+        QAction* a = intervalMenu->addAction(tr("%1 秒").arg(s));
+        a->setCheckable(true);
+        a->setData(s * 1000);
+        a->setChecked(s * 1000 == curMs);
+    }
+
+    QAction* picked = menu.exec(ui.canvas->mapToGlobal(pos));
+    if (!picked) return;
+
+    if (bgActs.contains(picked)) {
+        m_bgMode = ImageView::Background(picked->data().toInt());
+        ui.canvas->setBackgroundMode(m_bgMode);
+        Settings::setValue("view/bgMode", int(m_bgMode));
+    } else {   // 间隔项：data = ms
+        const int ms = picked->data().toInt();
+        Settings::setValue("slide/intervalMs", ms);
+        if (m_slide.isRunning()) m_slide.start(ms);   // 播放中改间隔 → 立即按新节律重启计时
+    }
+}
+
+// Task 6：当前图片移入回收站（可撤销删除）。失败绝不动模型，成功才重建树/切图。
+void MainWindow::onDelete()
+{
+    const QString oldPath = m_model.current();
+    if (oldPath.isEmpty()) {
+        ui.statusBar->showMessage(tr("当前没有打开的图片。"), 3000);
+        return;
+    }
+
+    const QString fileName = QFileInfo(oldPath).fileName();
+    if (QMessageBox::question(this, tr("移入回收站"), tr("将移入回收站：%1？").arg(fileName),
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+        return;
+
+    QString err;
+    if (!RecycleBin::moveToRecycleBin(oldPath, &err)) {
+        // T8 才有 QSS；这里用消息标签自带的富文本着色（QLabel::AutoText 会识别 HTML）。
+        ui.statusBar->showMessage(
+            tr("<span style=\"color:#e5484d;\">无法移入回收站：%1（原因：%2）</span>").arg(fileName, err));
+        return;   // 模型与缩略图栏保持不变
+    }
+
+    m_model.removeFile(oldPath);
+    rebuildThumbPanel();   // 已删条目从面板消失（面板可见时 populate，等价于 m_thumbs->populate）
+
+    if (m_model.files().isEmpty()) {
+        m_currentPath.clear();
+        ++m_loadSeq;       // 作废仍在途的异步解码结果，避免它把已删图片又画回来
+        // 目录已无图片：取消幻灯片勾选。setChecked(false) 触发 toggled(false) →
+        // 构造函数中显式 connect 的 onSlideToggled(false) → m_slide.stop()，
+        // 复用既有停表链路，也让 toggle 的勾选态与实际状态一致。
+        ui.actSlide->setChecked(false);
+        ui.canvas->clearImage();
+        if (m_lblInfo) m_lblInfo->clear();
+        if (m_lblZoom) m_lblZoom->clear();
+        setWindowTitle(tr("LightSee 看图"));
+        updateActionStates();   // Task 7：末图删空 → prev/next/slide/delete 回到禁用
+        ui.statusBar->showMessage(tr("已移入回收站：%1（目录内已无图片）").arg(fileName), 5000);
+        return;
+    }
+    showCurrent();
+    ui.statusBar->showMessage(tr("已移入回收站：%1").arg(fileName), 5000);
+}
+
+void MainWindow::toggleFullScreen()
+{
+    m_fullscreen = !m_fullscreen;
+    if (m_fullscreen) {
+        m_savedGeometry = saveGeometry();
+        ui.toolBar->setVisible(false);
+        showFullScreen();
+    } else {
+        showNormal();
+        if (!m_savedGeometry.isEmpty())
+            restoreGeometry(m_savedGeometry);
+        ui.toolBar->setVisible(true);
+    }
+}
+
+void MainWindow::keyPressEvent(QKeyEvent* e)
+{
+    // final-fix I3：Ctrl/Alt/Meta 组合键一律交回基类（QAction 快捷键如 Ctrl+O
+    // 走 shortcut 系统，不经过这里）。经查下方 switch 无任何带修饰键的设计绑定，
+    // 故无需豁免项；Shift 保持放行（switch 不用修饰键，Shift+A 等翻页无碍）。
+    if (e->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) {
+        QMainWindow::keyPressEvent(e);
+        return;
+    }
+    // 注意：Space 预留给 Task 5 幻灯片切换，本任务不绑定 Space→next（控制方裁定）。
+    switch (e->key()) {
+    case Qt::Key_Left:  case Qt::Key_A:       onPrev();       return;
+    case Qt::Key_Right: case Qt::Key_D:       onNext();       return;
+    case Qt::Key_Plus:  case Qt::Key_Equal:   onZoomIn();     return;
+    case Qt::Key_Minus:                       onZoomOut();    return;
+    case Qt::Key_0:                           onFit();        return;
+    case Qt::Key_1:                           onActual();     return;
+    case Qt::Key_L:                           onRotateLeft(); return;
+    case Qt::Key_R:                           onRotateRight();return;
+    case Qt::Key_H:                           onFlipH();      return;
+    case Qt::Key_V:                           onFlipV();      return;
+    // Task 5：幻灯片与全屏。方向键（Left/Right 已在上方）在播放中手动翻页，
+    // 不触碰 m_slide，因此不会重置计时器。
+    case Qt::Key_F:  case Qt::Key_F11:        toggleFullScreen(); return;
+    case Qt::Key_Space:                       ui.actSlide->trigger(); return;
+    // Task 6：Delete 键。actDelete 在 .ui 中未声明 shortcut，故此处唯一触发点，不会双触发。
+    case Qt::Key_Delete:                      onDelete();         return;
+    case Qt::Key_Escape:
+        // 仅在全屏时消费（退出全屏）；否则交给基类处理。
+        if (m_fullscreen) { toggleFullScreen(); return; }
+        break;
+    default: break;
+    }
+    QMainWindow::keyPressEvent(e);
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* e)
+{
+    if (e->mimeData()->hasUrls()) e->acceptProposedAction();   // text/uri-list
+}
+
+void MainWindow::dropEvent(QDropEvent* e)
+{
+    const QList<QUrl> urls = e->mimeData()->urls();
+    for (const QUrl& url : urls) {
+        if (url.isLocalFile()) { openFile(url.toLocalFile()); break; }
+    }
+    e->acceptProposedAction();
+}
+
+// Task 7：关窗持久化 —— 窗口几何 / 缩略图面板勾选 / 最后所在目录。
+void MainWindow::closeEvent(QCloseEvent* e)
+{
+    Settings::setValue("win/geometry", saveGeometry());
+    Settings::setValue("view/thumbPanel", ui.actPanel->isChecked());
+    const QString dir = QFileInfo(m_model.current()).absolutePath();
+    if (!dir.isEmpty())
+        Settings::setValue("win/lastDir", dir);
+    QMainWindow::closeEvent(e);
+}
+
+// Task 7：main.cpp 在构造后还调用 resize(1100,700)，会覆盖构造期的 restoreGeometry；
+// 故首次 showEvent（此时所有外部尺寸设置都已发生）再恢复一次，保证位置+大小都记住。
+void MainWindow::showEvent(QShowEvent* e)
+{
+    QMainWindow::showEvent(e);
+    if (m_firstShow) {
+        m_firstShow = false;
+        if (!m_winGeometry.isEmpty())
+            restoreGeometry(m_winGeometry);
+    }
+}

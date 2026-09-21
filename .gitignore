@@ -1,0 +1,14 @@
+# IDE / 本地
+.vs/
+*.user
+
+# 构建产物
+x64/
+heif-plugin/x64/
+QtWidgetsLight/x64/
+
+# libde265/libheif 编译中间产物（SDK 输出 bin/include/lib 保留，可由 scripts/build-heif.ps1 重建）
+third_party/libheif/_build/
+
+# SDD 工作区（台账/证据/临时包，git 忽略的临时目录）
+.superpowers/
