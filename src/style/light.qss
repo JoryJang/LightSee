@@ -18,10 +18,10 @@ QSplitter#centerSplit::handle { background: #d8dade; height: 6px; }
 QSplitter#centerSplit::handle:hover { background: #b9bec6; }
 QGraphicsView#canvas { background: #f5f6f8; }
 QToolTip { background: #ffffff; color: #333538; border: 1px solid #cdd1d7; }
-/* 自定义标题栏（setMenuWidget 挂在窗口最顶，工具栏之上） */
-QWidget#titleBar { background: #f5f6f8; }
-QLabel#lblApp { color: #333538; font-size: 12px; }
-#titleBar QPushButton { background: transparent; border: none; color: #333538;
-                        padding: 0 10px; min-width: 26px; }
-#titleBar QPushButton:hover { background: #e2e4e8; }
+/* 自定义标题栏（setMenuWidget 挂在窗口最顶，工具栏之上）：浅蓝底 + 白字 */
+QWidget#titleBar { background: #4a86c8; }
+QLabel#lblApp { color: white; font-size: 12px; }
+#titleBar QPushButton { background: transparent; border: none; color: white;
+                        padding: 0 10px; min-width: 26px; min-height: 32px; }
+#titleBar QPushButton:hover { background: #3d74b0; }
 #titleBar QPushButton#btnClose:hover { background: #c42b1c; color: white; }
