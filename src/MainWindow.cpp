@@ -73,6 +73,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     // 菜单区（工具栏之上、窗口最顶），centralArea 只剩一个空的布局占位项。
     // 裸 QWidget 默认不画 QSS background，必须显式开 WA_StyledBackground。
     ui.titleBar->setAttribute(Qt::WA_StyledBackground, true);
+    // 原生标题栏已被 WM_NCCALCSIZE 裁掉，任务栏/Alt-Tab 用窗口图标，
+    // 窗口内的图标只能在自定义标题栏自己画一份。
+    ui.lblIcon->setPixmap(QIcon(QStringLiteral(":/lightsee.ico")).pixmap(16, 16));
     setMenuWidget(ui.titleBar);
     connect(ui.btnMin,    &QPushButton::clicked, this, &QWidget::showMinimized);
     connect(ui.btnMax,    &QPushButton::clicked, this, [this]{
@@ -115,6 +118,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     m_lblZoom = new QLabel(this);
     m_lblSlide = new QLabel(tr("▶ 播放中"), this);
     m_lblSlide->setVisible(false);
+    m_lblFile = new QLabel(this);
+    m_lblFile->setObjectName(QStringLiteral("lblFile"));
+    ui.statusBar->addWidget(m_lblFile);   // addWidget=左侧常驻；上面三件 permanent 在右侧
     ui.statusBar->addPermanentWidget(m_lblInfo);
     ui.statusBar->addPermanentWidget(m_lblZoom);
     ui.statusBar->addPermanentWidget(m_lblSlide);
@@ -203,10 +209,16 @@ void MainWindow::showCurrent()
     syncTitle();
 }
 
-// windowTitle 仍是任务栏/Alt-Tab 的显示源，自定义条只是镜像一份。
+// windowTitle 仍是任务栏/Alt-Tab 的显示源；左下角只镜像"文件名 (序号/总数)"。
 void MainWindow::syncTitle()
 {
-    ui.lblTitle->setText(windowTitle());
+    const QString path = m_model.current();
+    if (path.isEmpty() || m_model.files().isEmpty()) {
+        m_lblFile->clear();
+        return;
+    }
+    m_lblFile->setText(tr("%1 (%2/%3)").arg(QFileInfo(path).fileName())
+                       .arg(m_model.index() + 1).arg(m_model.files().size()));
 }
 
 void MainWindow::updatePanelVisibility()

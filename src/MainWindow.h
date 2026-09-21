@@ -65,7 +65,7 @@ private:
     void preloadNeighbors();     // Task 7：fire-and-forget 预解码 next/prev 进缓存
     void updateActionStates();   // Task 7：无图时统一禁用 prev/next/slide/delete
     void applyTheme();           // 按 m_theme 加载 :/dark.qss 或 :/light.qss
-    void syncTitle();            // windowTitle → lblTitle（自定义标题栏）
+    void syncTitle();            // 当前图 → 状态栏左下角 lblFile
     Ui::ViewerForm ui;
     FolderModel m_model;
     SlideShowController m_slide;
@@ -83,4 +83,5 @@ private:
     QLabel* m_lblInfo = nullptr;
     QLabel* m_lblZoom = nullptr;
     QLabel* m_lblSlide = nullptr;   // Task 7：播放中常驻 "▶ 播放中"
+    QLabel* m_lblFile = nullptr;    // 状态栏左下角：文件名 (序号/总数)
 };

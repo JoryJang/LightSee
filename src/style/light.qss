@@ -20,7 +20,7 @@ QGraphicsView#canvas { background: #f5f6f8; }
 QToolTip { background: #ffffff; color: #333538; border: 1px solid #cdd1d7; }
 /* 自定义标题栏（setMenuWidget 挂在窗口最顶，工具栏之上） */
 QWidget#titleBar { background: #f5f6f8; }
-QLabel#lblTitle { color: #333538; font-size: 12px; }
+QLabel#lblApp { color: #333538; font-size: 12px; }
 #titleBar QPushButton { background: transparent; border: none; color: #333538;
                         padding: 0 10px; min-width: 26px; }
 #titleBar QPushButton:hover { background: #e2e4e8; }

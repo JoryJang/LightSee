@@ -1,5 +1,6 @@
 #include <QtWidgets/QApplication>
 #include <QFileInfo>
+#include <QIcon>
 #include "src/MainWindow.h"
 #include "src/SelfTest.h"
 #include "src/Log.h"
@@ -7,6 +8,8 @@
 int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
+    // exe 图标由 app.rc 提供；此处覆盖标题栏/任务栏/Alt-Tab 的窗口图标。
+    app.setWindowIcon(QIcon(":/lightsee.ico"));
     Log::init();
     QStringList args = app.arguments().mid(1);
     L_INFO("启动参数: [{}]", args.join(QLatin1Char(' ')).toStdString());

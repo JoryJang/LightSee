@@ -1,1 +1,1 @@
-<RCC><qresource prefix="/"><file alias="dark.qss">src/style/dark.qss</file><file alias="light.qss">src/style/light.qss</file></qresource></RCC>
+<RCC><qresource prefix="/"><file alias="dark.qss">src/style/dark.qss</file><file alias="light.qss">src/style/light.qss</file><file alias="lightsee.ico">src/res/lightsee.ico</file></qresource></RCC>

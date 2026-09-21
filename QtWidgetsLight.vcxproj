@@ -111,6 +111,7 @@ xcopy /y "$(SolutionDir)third_party\libheif\bin\*.dll" "$(OutDir)"</Command>
   </ItemDefinitionGroup>
   <ItemGroup>
     <QtRcc Include="resources.qrc" />
+    <ResourceCompile Include="app.rc" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>

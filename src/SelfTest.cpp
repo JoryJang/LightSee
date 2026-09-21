@@ -308,8 +308,8 @@ int SelfTest::run()
         QPushButton* bMax   = probe.findChild<QPushButton*>("btnMax");
         QPushButton* bClose = probe.findChild<QPushButton*>("btnClose");
         QWidget* tb         = probe.findChild<QWidget*>("titleBar");
-        CHECK(bMin && bMax && bClose && probe.findChild<QLabel*>("lblTitle"),
-              "titlebar: caption buttons and title label exist");
+        CHECK(bMin && bMax && bClose && probe.findChild<QLabel*>("lblFile"),
+              "titlebar: caption buttons exist and statusbar file label present");
         CHECK(tb && tb->parent() == &probe,
               "titlebar: installed as menu-area widget (direct child of MainWindow)");
     }
