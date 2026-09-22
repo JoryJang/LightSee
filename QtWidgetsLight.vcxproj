@@ -123,6 +123,7 @@ xcopy /y "$(SolutionDir)third_party\libheif\bin\*.dll" "$(OutDir)"</Command>
     <ClCompile Include="src\ThumbnailLoader.cpp" />
     <ClCompile Include="src\SlideShowController.cpp" />
     <ClCompile Include="src\RecycleBin.cpp" />
+    <ClCompile Include="src\FileAssoc.cpp" />
     <ClCompile Include="src\Log.cpp" />
     <QtMoc Include="src\MainWindow.h" />
     <QtMoc Include="src\ImageView.h" />

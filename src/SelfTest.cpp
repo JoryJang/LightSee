@@ -11,6 +11,7 @@
 #include "src/PreloadCache.h"
 #include "src/RecycleBin.h"
 #include "src/SlideShowController.h"
+#include "src/FileAssoc.h"
 #include "src/Log.h"
 #include <QCoreApplication>
 #include <QGraphicsScene>
@@ -219,6 +220,18 @@ int SelfTest::run()
         const bool trimmed = c.size() == PreloadCache::Cap / 2;
         std::printf("  preload: size after 13th put = %d (cap %d)\n", c.size(), int(PreloadCache::Cap));
         CHECK(trimmed, "preload: over-cap put trims to half of cap");
+    }
+
+    // --- FileAssoc (纯逻辑：命令行拼装与扩展名表，绝不写注册表) ---
+    {
+        const QString cmd = FileAssoc::openCommand("C:/Program Files/LightSee/QtWidgetsLight.exe");
+        const bool cmdOk = cmd == QStringLiteral("\"C:\\Program Files\\LightSee\\QtWidgetsLight.exe\" \"%1\"");
+        CHECK(cmdOk, "fileassoc: openCommand quotes native path and appends \"%1\"");
+
+        const QStringList exts = FileAssoc::photoExtensions();
+        const bool extOk = exts.contains("jpg") && exts.contains("png")
+                           && !exts.contains("svg") && !exts.contains(".jpg");
+        CHECK(extOk, "fileassoc: photoExtensions dotless, common formats only");
     }
 
     // --- ImageView scene rect (滚动条残留回归) ---

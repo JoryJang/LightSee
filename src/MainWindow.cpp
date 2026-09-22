@@ -2,6 +2,7 @@
 #include "src/ThumbnailLoader.h"
 #include "src/Settings.h"
 #include "src/RecycleBin.h"
+#include "src/FileAssoc.h"
 #include "src/Log.h"
 #include <QFileDialog>
 #include <QFileInfo>
@@ -432,8 +433,27 @@ void MainWindow::onCanvasMenu(const QPoint& pos)
         a->setChecked(s * 1000 == curMs);
     }
 
+    menu.addSeparator();
+    QAction* assocAct = menu.addAction(tr("关联图片格式（写入系统）"));
+
     QAction* picked = menu.exec(ui.canvas->mapToGlobal(pos));
     if (!picked) return;
+
+    if (picked == assocAct) {
+        QString err;
+        if (FileAssoc::registerPhotoAssociations(QCoreApplication::applicationFilePath(), &err)) {
+            L_INFO("图片格式关联已写入 HKCU");
+            QMessageBox::information(this, tr("关联完成"),
+                tr("已登记到右键\"打开方式\"（png/jpg/jpeg/bmp/gif/webp/heic）。\n\n"
+                   "系统限制无法静默改双击默认，请再操作一次：\n"
+                   "右键任意图片 → 打开方式 → 其他应用 → 选 LightSee 看图 → 勾选\"始终\"。"));
+        } else {
+            L_ERROR("图片格式关联失败: {}", err.toStdString());
+            ui.statusBar->showMessage(
+                tr("<span style=\"color:#e5484d;\">关联失败：%1</span>").arg(err));
+        }
+        return;
+    }
 
     if (bgActs.contains(picked)) {
         m_bgMode = ImageView::Background(picked->data().toInt());
