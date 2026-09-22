@@ -4,6 +4,7 @@
 #include "src/RecycleBin.h"
 #include "src/FileAssoc.h"
 #include "src/Log.h"
+#include "src/ImageLimits.h"
 #include "src/version.h"
 #include <QFileDialog>
 #include <QFileInfo>
@@ -38,6 +39,12 @@ static QImage decodeImage(const QString& path)
 {
     QImageReader reader(path);
     reader.setAutoTransform(true);
+    // R1：读头预检——Qt 5.14 无 setAllocationLimit，超限大图（解压炸弹）在 read()
+    // 分配发生前直接判失败，走"无法读取"分支而非 OOM/假死。阈值见 ImageLimits.h。
+    if (exceedsDecodeLimits(reader.size())) {
+        L_WARN("图片尺寸超限，拒绝解码: {}", path.toStdString());
+        return QImage();
+    }
     return reader.read();
 }
 
@@ -140,6 +147,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         restoreGeometry(m_winGeometry);            // 构造期先套一次；首次 showEvent 再套一次（防 main.cpp resize 覆盖）
 
     m_cache = std::make_shared<PreloadCache>();
+    m_preloadPool.setMaxThreadCount(1);   // P1：预解码串行后台执行，不与主图解码抢全局池
     setAcceptDrops(true);
 
     m_thumbs = new ThumbnailLoader(this);
@@ -193,10 +201,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
     // 显式 connect：点击缩略图切换。context object = this，MainWindow 析构后 lambda 不再触发，
     // 捕获 this 不会悬垂。
+    // P2：同目录点击只移索引（O(1)）——不再 setPath 重扫目录、不再全量重建缩略图面板；
+    // 仅当面板与模型失步（setCurrentFile 未命中）时才走 setPath 兜底。
     connect(ui.thumbPanel, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
         if (!item) return;
         const QString path = item->data(Qt::UserRole).toString();
-        if (!path.isEmpty() && m_model.setPath(path)) { rebuildThumbPanel(); showCurrent(); }
+        if (path.isEmpty()) return;
+        if (m_model.setCurrentFile(path)) { showCurrent(); return; }
+        if (m_model.setPath(path)) { rebuildThumbPanel(); showCurrent(); }
     });
 
     updateActionStates();   // Task 7：启动即无图 → prev/next/slide/delete 禁用
@@ -316,16 +328,19 @@ void MainWindow::startLoad(const QString& path)
 // Task 7：成功上屏后对相邻两张 fire-and-forget 预解码。
 // 注意不能调用 m_model.next()/prev() —— 它们会移动索引；改用 files()+index()
 // 环形取模自行窥视（与 FolderModel 的环绕语义一致）。
+// P1：预解码投递专用 1 线程池——主图解码独占 QtConcurrent 全局池，互不排队；
+// 每次先 clear 丢弃排队中的旧邻居任务（用户已翻走，旧解码纯属浪费 CPU）。
 void MainWindow::preloadNeighbors()
 {
     const QStringList files = m_model.files();
     const int i = m_model.index();
     const int n = files.size();
     if (n == 0 || i < 0 || i >= n) return;
+    m_preloadPool.clear();
     const QString paths[2] = { files[(i + 1) % n], files[(i - 1 + n) % n] };
     for (const QString& p : paths) {
         if (p.isEmpty() || m_cache->contains(p)) continue;   // 已缓存不重复解码
-        QtConcurrent::run(&preloadInto, m_cache, p);         // worker 只持 shared_ptr 副本，见 PreloadCache.h
+        QtConcurrent::run(&m_preloadPool, &preloadInto, m_cache, p);   // worker 只持 shared_ptr 副本，见 PreloadCache.h
     }
 }
 
@@ -701,7 +716,8 @@ void MainWindow::onDelete()
 
     m_model.removeFile(oldPath);
     L_INFO("已移入回收站: {}（目录剩余 {} 张）", oldPath.toStdString(), m_model.files().size());
-    rebuildThumbPanel();   // 已删条目从面板消失（面板可见时 populate，等价于 m_thumbs->populate）
+    updatePanelVisibility();            // 目录删空时收起底部条
+    m_thumbs->removeOne(oldPath);       // P3：增量移除单个条目，不再全量重建/重解码
 
     if (m_model.files().isEmpty()) {
         L_INFO("目录内已无图片，回空态并停止幻灯片");

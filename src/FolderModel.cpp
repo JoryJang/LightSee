@@ -46,6 +46,20 @@ bool FolderModel::setPath(const QString& filePath)
     return m_index >= 0;
 }
 
+bool FolderModel::setCurrentFile(const QString& filePath)
+{
+    // P2：面板条目存的路径即 setPath 物化的 absoluteFilePath，indexOf 直接命中；
+    // 未命中说明调用方与当前列表失步（目录已换），交回 setPath 兜底。
+    const int i = m_files.indexOf(QFileInfo(filePath).absoluteFilePath());
+    if (i < 0) {
+        L_DEBUG("setCurrentFile 未命中: {}", filePath.toStdString());
+        return false;
+    }
+    m_index = i;
+    L_DEBUG("setCurrentFile: {}（索引 {}）", filePath.toStdString(), m_index);
+    return true;
+}
+
 QString FolderModel::current() const
 { return m_index >= 0 && m_index < m_files.size() ? m_files[m_index] : QString(); }
 

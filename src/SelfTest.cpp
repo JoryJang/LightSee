@@ -12,11 +12,15 @@
 #include "src/RecycleBin.h"
 #include "src/SlideShowController.h"
 #include "src/FileAssoc.h"
+#include "src/ThumbnailLoader.h"
+#include "src/ImageLimits.h"
 #include "src/Log.h"
 #include <QCoreApplication>
 #include <QGraphicsScene>
 #include <QLabel>
 #include <QPushButton>
+#include <QListWidget>
+#include <QElapsedTimer>
 #include <QImageReader>
 #include <QImage>
 #include <QFileInfo>
@@ -115,6 +119,51 @@ int SelfTest::run()
         CHECK(m.files().size() == 3 && m.current() == dir + "/e.GIF", "folder: remove self re-points");
         CHECK(FolderModel::supportedExtensions().contains("heic"), "folder: heic ext declared");
         CHECK(m.setPath(dir + "/missing.jpg") == false, "folder: unknown file rejected");
+        // P2：setCurrentFile 同目录 O(1) 定位（只移索引不重扫）；不在列表的路径拒绝。
+        // CHECK 双求值：状态变更调用先折叠成 bool。
+        const bool setCurOk = m.setCurrentFile(dir + "/b.png") && m.current() == dir + "/b.png";
+        const bool setCurMiss = !m.setCurrentFile(dir + "/no_such.png");
+        CHECK(setCurOk, "folder: setCurrentFile re-points index within same dir");
+        CHECK(setCurMiss, "folder: setCurrentFile rejects file not in list");
+    }
+
+    // --- ThumbnailLoader（P1 专用池 + P3 缓存/增量移除）---
+    {
+        // 造两张真实 PNG：renderThumb 走 QImageReader 真解码路径。
+        const QString dir = QDir::temp().filePath("lightsee_thumb_selftest");
+        QDir(dir).removeRecursively();
+        QDir().mkpath(dir);
+        QImage img1(60, 40, QImage::Format_ARGB32); img1.fill(Qt::red);
+        QImage img2(40, 60, QImage::Format_ARGB32); img2.fill(Qt::blue);
+        const QString f1 = dir + "/t1.png", f2 = dir + "/t2.png";
+        const bool saved = img1.save(f1, "PNG") && img2.save(f2, "PNG");
+        CHECK(saved, "thumbs: png fixtures created");
+        if (saved) {
+            ThumbnailLoader loader;
+            QListWidget w;
+            loader.populate(&w, QStringList() << f1 << f2);
+            const bool created = w.count() == 2;
+            CHECK(created, "thumbs: populate creates one item per file");
+            // 泵事件等专用池异步交付（正常几十 ms；3s 兜底防挂起）。
+            QElapsedTimer t; t.start();
+            while (t.elapsed() < 3000 && w.count() == 2
+                   && (w.item(0)->icon().isNull() || w.item(1)->icon().isNull()))
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            const bool delivered = w.count() == 2
+                                && !w.item(0)->icon().isNull() && !w.item(1)->icon().isNull();
+            CHECK(delivered, "thumbs: async icons delivered from dedicated pool");
+            // P3 缓存命中：同目录再次 populate 必须同步带图标（不等任何线程）。
+            loader.populate(&w, QStringList() << f1 << f2);
+            const bool cached = w.count() == 2
+                             && !w.item(0)->icon().isNull() && !w.item(1)->icon().isNull();
+            CHECK(cached, "thumbs: second populate served synchronously from cache");
+            // P3 增量移除：只删对应条目，其余保留。
+            loader.removeOne(f1);
+            const bool removed = w.count() == 1
+                              && w.item(0)->data(Qt::UserRole).toString() == f2;
+            CHECK(removed, "thumbs: removeOne drops exactly the removed file");
+        }
+        QDir(dir).removeRecursively();
     }
 
     // --- SlideShow tick ---
@@ -220,6 +269,35 @@ int SelfTest::run()
         const bool trimmed = c.size() == PreloadCache::Cap / 2;
         std::printf("  preload: size after 13th put = %d (cap %d)\n", c.size(), int(PreloadCache::Cap));
         CHECK(trimmed, "preload: over-cap put trims to half of cap");
+    }
+
+    // --- PreloadCache P4：字节预算 ---
+    {
+        PreloadCache c;
+        QImage big(4096, 4096, QImage::Format_ARGB32);   // 64MB/张（隐式共享，物理占用一份）
+        for (int i = 0; i < 12; ++i) c.put(QString("/big/%1.png").arg(i), big);
+        std::printf("  preload-budget: size after 12x64MB puts = %d\n", c.size());
+        const bool budgetOk = c.size() == 8;   // 768MB > 512MB 预算 → 逐张驱逐到 512MB；张数未超 Cap，不触发张数修剪
+        CHECK(budgetOk, "preload: byte budget evicts until under budget (12x64MB -> 8)");
+        PreloadCache s;
+        QImage huge(10240, 8192, QImage::Format_ARGB32);  // 320MB/张
+        s.put("/h/a.png", huge);
+        s.put("/h/b.png", huge);
+        const bool keepOne = s.size() == 1
+                          && (s.contains("/h/a.png") || s.contains("/h/b.png"));
+        CHECK(keepOne, "preload: single oversized entry kept, never evicted to zero");
+    }
+
+    // --- R1：解码尺寸守卫（ImageLimits.h）---
+    {
+        const bool bomb = exceedsDecodeLimits(QSize(30000, 30000));   // 900MP 解压炸弹
+        const bool side = exceedsDecodeLimits(QSize(40000, 100));     // 单边超 32767 的细长条
+        const bool phoneOk = !exceedsDecodeLimits(QSize(8000, 6000)); // 48MP 手机照片放行
+        const bool noHeader = !exceedsDecodeLimits(QSize());          // 头部无尺寸 → 交给 read()
+        CHECK(bomb, "limits: 30000x30000 decompression bomb rejected");
+        CHECK(side, "limits: over-32767 side rejected");
+        CHECK(phoneOk, "limits: 48MP photo allowed");
+        CHECK(noHeader, "limits: unknown header size passes to reader");
     }
 
     // --- FileAssoc (纯逻辑：命令行拼装与扩展名表，绝不写注册表) ---

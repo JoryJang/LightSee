@@ -2,6 +2,7 @@
 #include <QMainWindow>
 #include <QIcon>
 #include <QByteArray>
+#include <QThreadPool>
 #include <memory>
 #include "ui_Viewer.h"
 #include "src/FolderModel.h"
@@ -82,6 +83,7 @@ private:
     QIcon m_slideIconOff, m_slideIconOn;    // 勾选蓝底需反白的图标对：幻灯片
     QIcon m_panelIconOff, m_panelIconOn;    // ……缩略图栏
     std::shared_ptr<PreloadCache> m_cache;              // Task 7：worker 持 shared_ptr 副本，见 PreloadCache.h
+    QThreadPool m_preloadPool;                          // P1：相邻图预解码专用 1 线程池
     ThumbnailLoader* m_thumbs = nullptr;
     QString m_currentPath;
     quint64 m_loadSeq = 0;
