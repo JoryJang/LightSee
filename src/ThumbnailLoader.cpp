@@ -38,9 +38,9 @@ void ThumbnailLoader::populate(QListWidget* target, const QStringList& paths)
     for (const QString& p : paths) {
         // 底部横排只显示缩略图不带标题；文件名放 tooltip，悬停可见。
         // 图标异步加载：创建时无 icon/text，delegate sizeHint 会退化成极小格子且事后不重算，
-        // 必须显式定格子（icon 150x110 + 四周 padding）。
+        // 必须显式定格子（icon 150x110 + 少量 padding，水平留白更小以贴近相邻）。
         auto* item = new QListWidgetItem(target);
-        item->setSizeHint(QSize(158, 118));
+        item->setSizeHint(QSize(152, 118));
         item->setToolTip(QFileInfo(p).fileName());
         item->setData(Qt::UserRole, p);
         auto* w = new QFutureWatcher<QPixmap>(target);
