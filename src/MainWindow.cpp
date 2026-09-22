@@ -23,6 +23,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QPushButton>
+#include <QSystemTrayIcon>
 #include <QWindow>
 #ifdef Q_OS_WIN
 #define WIN32_LEAN_AND_MEAN
@@ -83,6 +84,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         isMaximized() ? showNormal() : showMaximized();
     });
     connect(ui.btnClose,  &QPushButton::clicked, this, &QWidget::close);
+
+    // 系统托盘：关窗收进托盘，右键"退出"才真退（见 closeEvent 的 m_quitting 分支）。
+    // 托盘不可用的平台不创建，关窗保持原退出行为。
+    if (QSystemTrayIcon::isSystemTrayAvailable()) {
+        auto* trayMenu = new QMenu(this);
+        trayMenu->addAction(tr("打开"), this, &MainWindow::showFromTray);
+        trayMenu->addAction(tr("退出"), this, [this]{
+            m_quitting = true;
+            close();
+        });
+        m_tray = new QSystemTrayIcon(QIcon(QStringLiteral(":/lightsee.ico")), this);
+        m_tray->setToolTip(QStringLiteral("LightSee"));
+        m_tray->setContextMenu(trayMenu);
+        connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason r){
+            if (r == QSystemTrayIcon::DoubleClick) showFromTray();
+        });
+        m_tray->show();
+    }
 
     // Task 7：启动状态恢复。actPanel 的 setChecked 放在 toggled connect 之前
     // ——恢复不触发 onTogglePanel，避免 populate 风暴（brief 允许 blockSignals 或先设再连，取后者）。
@@ -593,6 +612,8 @@ void MainWindow::dropEvent(QDropEvent* e)
 }
 
 // Task 7：关窗持久化 —— 窗口几何 / 缩略图面板勾选 / 最后所在目录。
+// 之后若托盘可用且非"退出"路径：ignore + hide 收进托盘，进程存活；
+// 托盘"退出"置 m_quitting 后再 close() 走到下面的真关闭，主窗口销毁→事件循环自然结束。
 void MainWindow::closeEvent(QCloseEvent* e)
 {
     Settings::setValue("win/geometry", saveGeometry());
@@ -602,7 +623,22 @@ void MainWindow::closeEvent(QCloseEvent* e)
     if (!dir.isEmpty())
         Settings::setValue("win/lastDir", dir);
     L_INFO("关窗：持久化几何/面板状态/最后目录 {}", dir.toStdString());
+    if (m_tray && !m_quitting) {
+        L_INFO("关窗：收进系统托盘，进程保活");
+        e->ignore();
+        hide();
+        return;
+    }
     QMainWindow::closeEvent(e);
+}
+
+// 从托盘恢复窗口：hide 回来若残留最小化态需显式解除。
+void MainWindow::showFromTray()
+{
+    show();
+    setWindowState(windowState() & ~Qt::WindowMinimized);
+    raise();
+    activateWindow();
 }
 
 // Task 7：main.cpp 在构造后还调用 resize(1100,700)，会覆盖构造期的 restoreGeometry；

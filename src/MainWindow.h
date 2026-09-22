@@ -13,6 +13,7 @@ class QDragEnterEvent;
 class QDropEvent;
 class QKeyEvent;
 class QLabel;
+class QSystemTrayIcon;
 class ThumbnailLoader;
 
 class MainWindow : public QMainWindow
@@ -66,6 +67,7 @@ private:
     void updateActionStates();   // Task 7：无图时统一禁用 prev/next/slide/delete
     void applyTheme();           // 按 m_theme 加载 :/dark.qss 或 :/light.qss
     void syncTitle();            // 当前图 → 状态栏左下角 lblFile
+    void showFromTray();         // 从托盘恢复：show + 取消最小化 + 抢焦点
     Ui::ViewerForm ui;
     FolderModel m_model;
     SlideShowController m_slide;
@@ -84,4 +86,6 @@ private:
     QLabel* m_lblZoom = nullptr;
     QLabel* m_lblSlide = nullptr;   // Task 7：播放中常驻 "▶ 播放中"
     QLabel* m_lblFile = nullptr;    // 状态栏左下角：文件名 (序号/总数)
+    QSystemTrayIcon* m_tray = nullptr;   // 关窗收进托盘，托盘"退出"才真退
+    bool m_quitting = false;             // 区分 托盘退出 vs 关窗隐藏
 };
