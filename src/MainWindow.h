@@ -1,5 +1,6 @@
 #pragma once
 #include <QMainWindow>
+#include <QIcon>
 #include <QByteArray>
 #include <memory>
 #include "ui_Viewer.h"
@@ -78,6 +79,8 @@ private:
     bool m_firstShow = true;
     ImageView::Background m_bgMode = ImageView::Dark;   // Task 7：当前背景档
     int m_theme = 0;                                    // 0=深色 1=浅色（设置键 ui/theme）
+    QIcon m_slideIconOff, m_slideIconOn;    // 勾选蓝底需反白的图标对：幻灯片
+    QIcon m_panelIconOff, m_panelIconOn;    // ……缩略图栏
     std::shared_ptr<PreloadCache> m_cache;              // Task 7：worker 持 shared_ptr 副本，见 PreloadCache.h
     ThumbnailLoader* m_thumbs = nullptr;
     QString m_currentPath;

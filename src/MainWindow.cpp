@@ -24,6 +24,8 @@
 #include <QDateTime>
 #include <QFile>
 #include <QPushButton>
+#include <QIcon>
+#include <QPainter>
 #include <QSystemTrayIcon>
 #include <QWindow>
 #ifdef Q_OS_WIN
@@ -71,6 +73,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     // Task 8：界面主题。ui/theme 读档（0=深色默认），资源缺失时以默认样式运行。
     m_theme = Settings::value("ui/theme", 0).toInt() == 1 ? 1 : 0;
     applyTheme();
+
+    // 勾选变蓝底的图标按钮换反白版（见 installToolbarIcons 注释）。
+    connect(ui.actSlide, &QAction::toggled, this, [this](bool on) {
+        ui.actSlide->setIcon(on ? m_slideIconOn : m_slideIconOff);
+    });
+    connect(ui.actPanel, &QAction::toggled, this, [this](bool on) {
+        ui.actPanel->setIcon(on ? m_panelIconOn : m_panelIconOff);
+    });
+
+    // 图标组在工具栏内水平居中：两端各插一个水平扩展弹簧（QToolBar 布局器分配剩余空间）。
+    const auto makeSpring = [this] {
+        auto* w = new QWidget(ui.toolBar);
+        w->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        return w;
+    };
+    ui.toolBar->insertWidget(ui.toolBar->actions().first(), makeSpring());
+    ui.toolBar->addWidget(makeSpring());
 
     // 自定义标题栏：.ui 中挂在 centralArea 首行，setMenuWidget 会把它重挂到
     // 菜单区（工具栏之上、窗口最顶），centralArea 只剩一个空的布局占位项。
@@ -404,6 +423,157 @@ void MainWindow::onSlideToggled(bool on)
     if (m_lblSlide) m_lblSlide->setVisible(on);   // Task 7：播放中常驻 "▶ 播放中"
 }
 
+// ---- 工具栏自绘线条图标（图像操作去文字化）----
+// 24×24 透明画布 + 2px 圆头描边，与画布悬浮箭头同风格；不引入图片资源。
+// 幻灯片/缩略图栏勾选后蓝底，而 QToolButton 勾选不会自动换 QIcon 模式
+//（实测 Selected 无效），故各留一份反白版给 toggled 换装。
+namespace {
+
+constexpr double kPi = 3.14159265358979;
+
+template<typename Draw>
+QIcon lineIcon(Draw draw, const QColor& fg)
+{
+    QPixmap pm(24, 24);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    QPen pen(fg, 2);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    p.setPen(pen);
+    draw(p, fg);
+    p.end();
+    return QIcon(pm);
+}
+
+// 圆弧箭头：角度制（0°=3 点钟方向，逆时针为正），终点处沿运动切线画 V 形箭头。
+void arcArrow(QPainter& p, const QPointF& c, double r, double startDeg, double endDeg)
+{
+    p.drawArc(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r),
+              int(startDeg * 16), int((endDeg - startDeg) * 16));
+    const double a = endDeg * kPi / 180.0;
+    const QPointF e(c.x() + r * std::cos(a), c.y() - r * std::sin(a));
+    const double s = endDeg >= startDeg ? 1.0 : -1.0;      // 行进方向：+逆时针 -顺时针
+    const QPointF t(s * -std::sin(a), s * -std::cos(a));   // 屏幕坐标切线
+    const QPointF n(-t.y(), t.x());
+    const QPointF back = e - t * 5.5;
+    p.drawPolyline(QPolygonF() << back + n * 3.2 << e << back - n * 3.2);
+}
+
+void installToolbarIcons(Ui::ViewerForm& ui, const QColor& fg,
+                         QIcon& slideOff, QIcon& slideOn,
+                         QIcon& panelOff, QIcon& panelOn)
+{
+    ui.actOpen->setIcon(lineIcon([](QPainter& p, const QColor&) {
+        p.drawPolyline(QPolygonF() << QPointF(3.5, 19.5) << QPointF(3.5, 7)
+                                   << QPointF(9, 7) << QPointF(11, 9.2) << QPointF(20.5, 9.2)
+                                   << QPointF(20.5, 19.5) << QPointF(3.5, 19.5));
+    }, fg));
+    ui.actPrev->setIcon(lineIcon([](QPainter& p, const QColor&) {
+        p.drawEllipse(QPointF(12, 12), 9.2, 9.2);
+        p.drawPolyline(QPolygonF() << QPointF(13.8, 7.8) << QPointF(9.8, 12) << QPointF(13.8, 16.2));
+    }, fg));
+    ui.actNext->setIcon(lineIcon([](QPainter& p, const QColor&) {
+        p.drawEllipse(QPointF(12, 12), 9.2, 9.2);
+        p.drawPolyline(QPolygonF() << QPointF(10.2, 7.8) << QPointF(14.2, 12) << QPointF(10.2, 16.2));
+    }, fg));
+    const auto zoom = [](bool in) {
+        return [in](QPainter& p, const QColor&) {
+            p.drawEllipse(QPointF(10.5, 10.5), 6.0, 6.0);
+            p.drawLine(QPointF(14.9, 14.9), QPointF(19.5, 19.5));
+            if (in) p.drawLine(QPointF(10.5, 7.8), QPointF(10.5, 13.2));
+            p.drawLine(QPointF(7.8, 10.5), QPointF(13.2, 10.5));
+        };
+    };
+    ui.actZoomIn->setIcon(lineIcon(zoom(true), fg));
+    ui.actZoomOut->setIcon(lineIcon(zoom(false), fg));
+    ui.actFit->setIcon(lineIcon([](QPainter& p, const QColor&) {
+        p.drawPolyline(QPolygonF() << QPointF(4, 8) << QPointF(4, 4) << QPointF(8, 4));
+        p.drawPolyline(QPolygonF() << QPointF(16, 4) << QPointF(20, 4) << QPointF(20, 8));
+        p.drawPolyline(QPolygonF() << QPointF(20, 16) << QPointF(20, 20) << QPointF(16, 20));
+        p.drawPolyline(QPolygonF() << QPointF(8, 20) << QPointF(4, 20) << QPointF(4, 16));
+        p.drawRect(QRectF(8.5, 9.5, 7, 5));
+    }, fg));
+    ui.actActual->setIcon(lineIcon([](QPainter& p, const QColor& c) {
+        QFont f = p.font();
+        f.setBold(true);
+        f.setPixelSize(12);
+        p.setFont(f);
+        p.setPen(c);
+        p.drawText(QRectF(0, 0, 24, 24), Qt::AlignCenter, QStringLiteral("1:1"));
+    }, fg));
+    ui.actRotateL->setIcon(lineIcon([](QPainter& p, const QColor&) {
+        arcArrow(p, QPointF(12, 12.5), 8.0, -190, 90);   // 箭头在顶部指向左
+    }, fg));
+    ui.actRotateR->setIcon(lineIcon([](QPainter& p, const QColor&) {
+        arcArrow(p, QPointF(12, 12.5), 8.0, 10, -270);   // 箭头在顶部指向右
+    }, fg));
+    const auto flip = [](bool horizontal) {
+        return [horizontal](QPainter& p, const QColor& c) {
+            QPen dash(c, 2, Qt::DashLine);
+            dash.setCapStyle(Qt::FlatCap);
+            p.setPen(dash);
+            if (horizontal) p.drawLine(QPointF(12, 3), QPointF(12, 21));
+            else            p.drawLine(QPointF(3, 12), QPointF(21, 12));
+            QPen solid(c, 2);
+            solid.setCapStyle(Qt::RoundCap);
+            solid.setJoinStyle(Qt::RoundJoin);
+            p.setPen(solid);
+            if (horizontal) {
+                p.drawPolyline(QPolygonF() << QPointF(9.5, 6.5) << QPointF(4.5, 12)
+                                           << QPointF(9.5, 17.5) << QPointF(9.5, 6.5));
+                p.drawPolyline(QPolygonF() << QPointF(14.5, 6.5) << QPointF(19.5, 12)
+                                           << QPointF(14.5, 17.5) << QPointF(14.5, 6.5));
+            } else {
+                p.drawPolyline(QPolygonF() << QPointF(6.5, 9.5) << QPointF(12, 4.5)
+                                           << QPointF(17.5, 9.5) << QPointF(6.5, 9.5));
+                p.drawPolyline(QPolygonF() << QPointF(6.5, 14.5) << QPointF(12, 19.5)
+                                           << QPointF(17.5, 14.5) << QPointF(6.5, 14.5));
+            }
+        };
+    };
+    ui.actFlipH->setIcon(lineIcon(flip(true), fg));
+    ui.actFlipV->setIcon(lineIcon(flip(false), fg));
+    const auto slideDraw = [](QPainter& p, const QColor&) {
+        p.drawRoundedRect(QRectF(3, 4.5, 18, 12.5), 2, 2);
+        p.drawLine(QPointF(12, 17), QPointF(12, 20.5));
+        p.drawLine(QPointF(8.5, 20.5), QPointF(15.5, 20.5));
+        p.drawPolyline(QPolygonF() << QPointF(10.2, 8) << QPointF(10.2, 13.5)
+                                   << QPointF(14.8, 10.75) << QPointF(10.2, 8));
+    };
+    slideOff = lineIcon(slideDraw, fg);
+    slideOn  = lineIcon(slideDraw, Qt::white);
+    ui.actSlide->setIcon(ui.actSlide->isChecked() ? slideOn : slideOff);
+    ui.actInfo->setIcon(lineIcon([](QPainter& p, const QColor&) {
+        p.drawEllipse(QPointF(12, 12), 9.2, 9.2);
+        p.drawLine(QPointF(12, 7.3), QPointF(12, 7.5));      // i 点（圆头短划）
+        p.drawLine(QPointF(12, 10.8), QPointF(12, 16.6));    // i 竖
+    }, fg));
+    const auto panelDraw = [](QPainter& p, const QColor& c) {
+        p.drawRect(QRectF(3.5, 3.5, 17, 10));                          // 上：画布
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);                                                 // 下：三枚缩略块
+        p.drawRect(QRectF(3.5, 16.5, 4.8, 4));
+        p.drawRect(QRectF(9.6, 16.5, 4.8, 4));
+        p.drawRect(QRectF(15.7, 16.5, 4.8, 4));
+    };
+    panelOff = lineIcon(panelDraw, fg);
+    panelOn  = lineIcon(panelDraw, Qt::white);
+    ui.actPanel->setIcon(ui.actPanel->isChecked() ? panelOn : panelOff);
+    ui.actDelete->setIcon(lineIcon([](QPainter& p, const QColor&) {
+        p.drawLine(QPointF(4.5, 6.5), QPointF(19.5, 6.5));
+        p.drawPolyline(QPolygonF() << QPointF(9.5, 6.5) << QPointF(9.5, 4)
+                                   << QPointF(14.5, 4) << QPointF(14.5, 6.5));
+        p.drawPolyline(QPolygonF() << QPointF(6.5, 6.5) << QPointF(7.6, 20.5)
+                                   << QPointF(16.4, 20.5) << QPointF(17.5, 6.5));
+        p.drawLine(QPointF(10.2, 10), QPointF(10.2, 17));
+        p.drawLine(QPointF(13.8, 10), QPointF(13.8, 17));
+    }, fg));
+}
+
+} // namespace
+
 // 主题切换：整体替换样式表，Qt 会对所有子控件重新 polish，无需重启。
 void MainWindow::applyTheme()
 {
@@ -414,6 +584,10 @@ void MainWindow::applyTheme()
         L_WARN("主题样式表资源缺失: {}", qss.fileName().toStdString());
         setStyleSheet(QString());
     }
+    installToolbarIcons(ui, m_theme == 1 ? QColor(0x33, 0x35, 0x38)
+                                         : QColor(0xd8, 0xd9, 0xdb),
+                        m_slideIconOff, m_slideIconOn,
+                        m_panelIconOff, m_panelIconOn);
 }
 
 // Task 7：画布右键菜单（customContextMenuRequested 显式 connect 进来）。

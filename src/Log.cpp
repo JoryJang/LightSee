@@ -4,7 +4,7 @@
 #include <QDir>
 #include <QtGlobal>
 #include <vector>
-#include <spdlog/sinks/rotating_file_sink.h>
+#include <spdlog/sinks/daily_file_sink.h>
 #ifdef QT_DEBUG
 #include <spdlog/sinks/stdout_color_sinks.h>
 #endif
@@ -34,8 +34,9 @@ void init()
 
     std::vector<spdlog::sink_ptr> sinks;
     // SPDLOG_WCHAR_FILENAMES（vcxproj 全局定义）：宽字符路径，兼容非 ASCII 用户目录。
-    sinks.push_back(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-        QDir(logDir).filePath("lightsee.log").toStdWString(), 5 * 1024 * 1024, 3));
+    // 按天切分：lightsee_YYYY-MM-DD.log，零点轮转；truncate=false 同日重启追加不覆盖。
+    sinks.push_back(std::make_shared<spdlog::sinks::daily_file_sink_mt>(
+        QDir(logDir).filePath("lightsee.log").toStdWString(), 0, 0, false));
 #ifdef QT_DEBUG
     sinks.push_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
 #endif
