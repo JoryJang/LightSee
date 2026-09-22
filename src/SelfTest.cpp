@@ -224,8 +224,8 @@ int SelfTest::run()
 
     // --- FileAssoc (纯逻辑：命令行拼装与扩展名表，绝不写注册表) ---
     {
-        const QString cmd = FileAssoc::openCommand("C:/Program Files/LightSee/QtWidgetsLight.exe");
-        const bool cmdOk = cmd == QStringLiteral("\"C:\\Program Files\\LightSee\\QtWidgetsLight.exe\" \"%1\"");
+        const QString cmd = FileAssoc::openCommand("C:/Program Files/LightSee/LightSee.exe");
+        const bool cmdOk = cmd == QStringLiteral("\"C:\\Program Files\\LightSee\\LightSee.exe\" \"%1\"");
         CHECK(cmdOk, "fileassoc: openCommand quotes native path and appends \"%1\"");
 
         const QStringList exts = FileAssoc::photoExtensions();

@@ -4,6 +4,7 @@
 #include "src/RecycleBin.h"
 #include "src/FileAssoc.h"
 #include "src/Log.h"
+#include "src/version.h"
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImageReader>
@@ -454,6 +455,7 @@ void MainWindow::onCanvasMenu(const QPoint& pos)
 
     menu.addSeparator();
     QAction* assocAct = menu.addAction(tr("关联图片格式（写入系统）"));
+    QAction* aboutAct = menu.addAction(tr("关于 LightSee"));
 
     QAction* picked = menu.exec(ui.canvas->mapToGlobal(pos));
     if (!picked) return;
@@ -471,6 +473,14 @@ void MainWindow::onCanvasMenu(const QPoint& pos)
             ui.statusBar->showMessage(
                 tr("<span style=\"color:#e5484d;\">关联失败：%1</span>").arg(err));
         }
+        return;
+    }
+
+    if (picked == aboutAct) {
+        QMessageBox::about(this, tr("关于 LightSee"),
+            tr("<b>LightSee 看图 %1</b><br/>Qt %2<br/>%3")
+                .arg(QStringLiteral(LIGHTSEE_VERSION_STRING), QStringLiteral(QT_VERSION_STR),
+                     QDir::toNativeSeparators(QCoreApplication::applicationFilePath())));
         return;
     }
 

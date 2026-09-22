@@ -5,6 +5,7 @@
 # 构建产物
 x64/
 heif-plugin/x64/
+LightSee/x64/
 QtWidgetsLight/x64/
 
 # libde265/libheif 编译中间产物（SDK 输出 bin/include/lib 保留，可由 scripts/build-heif.ps1 重建）

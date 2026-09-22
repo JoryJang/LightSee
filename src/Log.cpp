@@ -1,4 +1,5 @@
 #include "src/Log.h"
+#include "src/version.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QtGlobal>
@@ -51,9 +52,9 @@ void init()
     spdlog::set_default_logger(logger);
     qInstallMessageHandler(qtMessageBridge);
 #ifdef QT_DEBUG
-    logger->info("==== LightSee 启动（Debug 构建）====");
+    logger->info("==== LightSee {} 启动（Debug 构建）====", LIGHTSEE_VERSION_STRING);
 #else
-    logger->info("==== LightSee 启动（Release 构建）====");
+    logger->info("==== LightSee {} 启动（Release 构建）====", LIGHTSEE_VERSION_STRING);
 #endif
 }
 

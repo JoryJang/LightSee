@@ -1,4 +1,4 @@
-# LightSee 看图（QtWidgetsLight）
+# LightSee 看图
 
 基于 Qt 5.14.2（msvc2017_64 / VS v143 工具链）的 Windows 图片查看器，界面风格对标现代看图软件：深色悬浮式工具栏 + 画布 + 可折叠缩略图侧栏。
 
@@ -28,13 +28,13 @@ build.cmd Release
 build.cmd Debug
 ```
 
-整解决方案（QtWidgetsLight.exe + HeifPlugin/qheif(.d).dll）一次构建；post-build 自动把 `qheif(.d).dll` 拷入 exe 目录 `imageformats\`、`heif.dll`/`libde265.dll` 拷入 exe 目录。
+整解决方案（LightSee.exe + HeifPlugin/qheif(.d).dll）一次构建；post-build 自动把 `qheif(.d).dll` 拷入 exe 目录 `imageformats\`、`heif.dll`/`libde265.dll` 拷入 exe 目录。
 
 ## 运行
 
 ```cmd
-x64\Release\QtWidgetsLight.exe [图片路径...]
-x64\Release\QtWidgetsLight.exe --selftest   :: 22 项自动化检查（解码像素门/翻页/幻灯片/回收站守卫/预加载缓存）
+x64\Release\LightSee.exe [图片路径...]
+x64\Release\LightSee.exe --selftest   :: 22 项自动化检查（解码像素门/翻页/幻灯片/回收站守卫/预加载缓存）
 ```
 
 开发机 Qt bin 在 PATH 时可直接跑；干净机器请按下面部署。
@@ -42,7 +42,7 @@ x64\Release\QtWidgetsLight.exe --selftest   :: 22 项自动化检查（解码像
 ## 打包部署（干净机器）
 
 ```cmd
-windeployqt --release --dir dist x64\Release\QtWidgetsLight.exe
+windeployqt --release --dir dist x64\Release\LightSee.exe
 ```
 
 然后**手工补拷 3 个 HEIC 文件**（windeployqt 不认识自研插件）：
@@ -53,6 +53,12 @@ windeployqt --release --dir dist x64\Release\QtWidgetsLight.exe
 
 已实测：按上述配方得到的 dist 目录在无 Qt PATH 的环境下 `--selftest` 22/22 PASS（含 HEIC 解码像素门）。
 Debug 配置的 `qheifd.dll` 由 build.cmd post-build 部署到 `x64\Debug\imageformats\`（selftest 双配置验证 HEIC 链路），但未做 `windeployqt --debug` 验证。
+
+## 版本
+
+- 单一来源：`src/version.h`。exe 属性页的 VERSIONINFO（`app.rc` 复用同一组宏）、启动日志首行、画布右键"关于 LightSee"都取这里。
+- 语义化 `MAJOR.MINOR.PATCH`：不兼容变更进 MAJOR，新增功能进 MINOR，缺陷修复进 PATCH。
+- 升版步骤：改 `src/version.h` → 重新生成解决方案（RC 增量只盯 `app.rc`，单改头文件不会重编资源）→ 提交 → `git tag -a v1.0.0 -m "LightSee 1.0.0"` → `git push origin v1.0.0`。
 
 ## 使用说明（键盘 / 鼠标）
 

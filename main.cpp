@@ -4,10 +4,12 @@
 #include "src/MainWindow.h"
 #include "src/SelfTest.h"
 #include "src/Log.h"
+#include "src/version.h"
 
 int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
+    app.setApplicationVersion(QStringLiteral(LIGHTSEE_VERSION_STRING));
     // exe 图标由 app.rc 提供；此处覆盖标题栏/任务栏/Alt-Tab 的窗口图标。
     app.setWindowIcon(QIcon(":/lightsee.ico"));
     Log::init();

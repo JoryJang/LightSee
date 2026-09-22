@@ -57,6 +57,10 @@ bool FileAssoc::registerPhotoAssociations(const QString& exePath, QString* error
     const QString cmd = openCommand(exe);
     const QString exeName = QFileInfo(exe).fileName();
 
+    // 改名遗留清理：Applications 键以 exe 文件名为键，旧名 QtWidgetsLight.exe 的条目
+    // 会留在"打开方式"里指向已不存在的程序。删失败不影响本次注册，忽略返回值。
+    ::RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\Classes\\Applications\\QtWidgetsLight.exe");
+
     // 1) ProgID：显示名 + 图标 + 打开命令（图标是 app.rc 嵌在 exe 里的资源，索引 0）。
     const QString progRoot = QStringLiteral("Software\\Classes\\LightSee.Image");
     if (!writeDefault(progRoot, QString::fromWCharArray(kDisplayName), errorOut)) return false;

@@ -1,1 +1,35 @@
+#include <windows.h>
+#include <winres.h>
+#include "src/version.h"
+
 IDI_APPICON ICON "src\\res\\lightsee.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION LIGHTSEE_VERSION_MAJOR,LIGHTSEE_VERSION_MINOR,LIGHTSEE_VERSION_PATCH,LIGHTSEE_VERSION_TWEAK
+ PRODUCTVERSION LIGHTSEE_VERSION_MAJOR,LIGHTSEE_VERSION_MINOR,LIGHTSEE_VERSION_PATCH,LIGHTSEE_VERSION_TWEAK
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        // 0804 = zh-CN, 04b0 = 1200 (UTF-16). Values stay ASCII to avoid .rc encoding issues.
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "LightSee"
+            VALUE "FileDescription", "LightSee Image Viewer"
+            VALUE "FileVersion", LIGHTSEE_VERSION_STRING
+            VALUE "InternalName", "LightSee"
+            VALUE "LegalCopyright", "Copyright (C) 2026 LightSee"
+            VALUE "OriginalFilename", "LightSee.exe"
+            VALUE "ProductName", "LightSee"
+            VALUE "ProductVersion", LIGHTSEE_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 1200
+    END
+END
