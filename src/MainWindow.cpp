@@ -35,17 +35,47 @@
 #include <windowsx.h>
 #endif
 
+// 降采样上屏的原图尺寸随 QImage 文本走，供 onLoadFinished 说明"这不是坏图"。
+static const char kDownscaledFrom[] = "lightsee/downscaled-from";
+
 static QImage decodeImage(const QString& path)
 {
     QImageReader reader(path);
     reader.setAutoTransform(true);
+    const QSize hdr = reader.size();
     // R1：读头预检——Qt 5.14 无 setAllocationLimit，超限大图（解压炸弹）在 read()
     // 分配发生前直接判失败，走"无法读取"分支而非 OOM/假死。阈值见 ImageLimits.h。
-    if (exceedsDecodeLimits(reader.size())) {
-        L_WARN("图片尺寸超限，拒绝解码: {}", path.toStdString());
+    if (exceedsDecodeLimits(hdr)) {
+        // 像素超限的 JPEG 例外：libjpeg 在解码阶段降采样，内存受控，能看清内容；
+        // 单边病态尺寸与其他格式（整图解码后再缩放）仍拒，否则重开 OOM 口子。
+        const QSize target = jpegDownscaleTarget(hdr, isJpegFormat(reader.format()));
+        if (!target.isValid()) {
+            L_WARN("图片尺寸超限，拒绝解码: {} ({}x{})", path.toStdString(), hdr.width(), hdr.height());
+            return QImage();
+        }
+        L_INFO("图片尺寸超限，降采样解码: {} ({}x{} -> {}x{})", path.toStdString(),
+               hdr.width(), hdr.height(), target.width(), target.height());
+        reader.setScaledSize(target);
+        QImage img = reader.read();
+        if (!img.isNull())
+            img.setText(QLatin1String(kDownscaledFrom), QStringLiteral("%1×%2").arg(hdr.width()).arg(hdr.height()));
+        return img;
+    }
+    return reader.read();   // 分配失败（内存不足）时同样返回空图
+}
+
+// "原始尺寸"开关用：绕开像素守卫整图解码（内存由用户显式承担），但单边病态尺寸
+// 仍拒——那种尺寸连行缓冲都会溢出，不是内存够不够的问题。
+static QImage decodeImageFull(const QString& path)
+{
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    const QSize hdr = reader.size();
+    if (exceedsSideLimit(hdr)) {
+        L_WARN("单边尺寸超上限，拒绝整图解码: {} ({}x{})", path.toStdString(), hdr.width(), hdr.height());
         return QImage();
     }
-    return reader.read();
+    return reader.read();   // 内存不足时同样返回空图，由调用方回退降采样显示
 }
 
 // Task 7：预加载 worker。按值捕获 shared_ptr 副本 + path 拷贝，只写缓存、
@@ -172,12 +202,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     ui.statusBar->addPermanentWidget(m_lblInfo);
     ui.statusBar->addPermanentWidget(m_lblZoom);
     ui.statusBar->addPermanentWidget(m_lblSlide);
+    // QStatusBar 的临时消息从状态栏最左端起画，只有右侧 permanent 区给它让位——
+    // 靠左的 lblFile 会被消息压住叠字。消息在场时隐掉文件名（消息本身带文件名），
+    // 消息清空再回来。
+    connect(ui.statusBar, &QStatusBar::messageChanged, m_lblFile, [this](const QString& msg) {
+        m_lblFile->setVisible(msg.isEmpty());
+    });
 
     connect(ui.actOpen,     &QAction::triggered, this, &MainWindow::onOpen);
     connect(ui.actPrev,     &QAction::triggered, this, &MainWindow::onPrev);
     connect(ui.actNext,     &QAction::triggered, this, &MainWindow::onNext);
     connect(ui.actFit,      &QAction::triggered, this, &MainWindow::onFit);
     connect(ui.actActual,   &QAction::triggered, this, &MainWindow::onActual);
+    connect(ui.actFullRes,  &QAction::toggled,   this, &MainWindow::onFullResToggled);
     connect(ui.actZoomIn,   &QAction::triggered, this, &MainWindow::onZoomIn);
     connect(ui.actZoomOut,  &QAction::triggered, this, &MainWindow::onZoomOut);
     connect(ui.actRotateL,  &QAction::triggered, this, &MainWindow::onRotateLeft);
@@ -303,6 +340,7 @@ void MainWindow::startLoad(const QString& path)
 {
     m_currentPath = path;
     ++m_loadSeq;
+    resetFullRes();     // 换图先丢弃上一张的原始尺寸结果（GB 级内存不跨图滞留）
 
     // Task 7：命中预加载缓存 → 立即上屏。m_loadSeq 已 bump，先前启动的在途
     // watcher 结果会因 seq 不符被丢弃，不会覆盖本次画面（brief 要求的防竞态）。
@@ -352,15 +390,87 @@ void MainWindow::updateActionStates()
     ui.actNext->setEnabled(hasImage);
     ui.actSlide->setEnabled(hasImage);
     ui.actDelete->setEnabled(hasImage);
+    // "原始尺寸"只在当前图确实是降采样上屏时可点（见 ImageLimits.h 的降采样路径）。
+    ui.actFullRes->setEnabled(hasImage && !m_downscaledFrom.isEmpty());
+}
+
+// 只复位勾选态与图标，不发 toggled 信号（避免被当成用户点击再去解码）。
+void MainWindow::setFullResChecked(bool on)
+{
+    const QSignalBlocker blocker(ui.actFullRes);
+    ui.actFullRes->setChecked(on);
+    ui.actFullRes->setIcon(on ? m_fullResIconOn : m_fullResIconOff);
+}
+
+void MainWindow::resetFullRes()
+{
+    m_fullResImg = QImage();
+    m_shownImg = QImage();
+    m_downscaledFrom.clear();
+    m_baseInfoText.clear();
+    setFullResChecked(false);
+}
+
+// 超大图的"原始尺寸"开关：勾选=绕开像素守卫整图重解码（内存按原图尺寸算，
+// 4.7 亿像素约 1.9GB），取消=换回已缓存的降采样版本，不重解码。
+// 全尺寸结果只上屏，绝不进预加载缓存；翻页/换目录由 startLoad 调 resetFullRes 释放。
+void MainWindow::onFullResToggled(bool on)
+{
+    // 用户点击不会经过 setFullResChecked，这里补一次：勾选态要立刻换成白色图标，
+    // 否则取消勾选后仍是白图标落在浅色工具栏上（QToolButton 不自动切 Selected）。
+    setFullResChecked(on);
+    if (!on) {
+        const bool hadFull = !m_fullResImg.isNull();
+        m_fullResImg = QImage();
+        if (!m_shownImg.isNull()) ui.canvas->setImage(m_shownImg, true);
+        if (m_lblInfo) m_lblInfo->setText(m_baseInfoText);   // 信息栏换回降采样那一行
+        if (hadFull) ui.statusBar->showMessage(tr("已回到降采样显示"), 3000);
+        return;
+    }
+
+    const QString path = m_model.current();
+    if (path.isEmpty() || m_downscaledFrom.isEmpty()) { setFullResChecked(false); return; }
+
+    ui.actFullRes->setEnabled(false);   // 解码期间防连点
+    const quint64 seq = m_loadSeq;
+    auto* w = new QFutureWatcher<QImage>(this);
+    connect(w, &QFutureWatcher<QImage>::finished, this, [this, w, seq, path]() {
+        const QImage img = w->result();
+        w->deleteLater();
+        if (seq != m_loadSeq) return;   // 期间已翻页/换图，结果作废
+        if (img.isNull()) {
+            L_WARN("原始尺寸解码失败（内存不足？）: {}", path.toStdString());
+            ui.statusBar->showMessage(tr("原始尺寸解码失败（内存不足），已保持降采样显示"), 5000);
+            setFullResChecked(false);
+        } else {
+            L_INFO("原始尺寸上屏: {} ({}x{})", path.toStdString(), img.width(), img.height());
+            m_fullResImg = img;
+            ui.canvas->setImage(img, true);   // 保持当前缩放，只换像素源
+            ui.statusBar->clearMessage();     // 消掉"正在解码"（无超时，不主动清会一直挂着）
+            if (m_lblInfo)
+                m_lblInfo->setText(tr("%1×%2 · %3").arg(img.width()).arg(img.height())
+                                       .arg(humanSize(QFileInfo(path).size())));
+        }
+        updateActionStates();           // 恢复可点（仍可再切回降采样）
+    });
+    w->setFuture(QtConcurrent::run(&decodeImageFull, path));
+    L_INFO("原始尺寸解码开始: {}", path.toStdString());
+    ui.statusBar->showMessage(tr("正在按原始尺寸解码 %1 …（内存占用大，请稍候）")
+                                  .arg(QFileInfo(path).fileName()));
 }
 
 void MainWindow::onLoadFinished(const QString& path, const QImage& img)
 {
     if (img.isNull()) {
         L_WARN("图片解码失败: {}", path.toStdString());
-        ui.statusBar->showMessage(tr("%1 无法读取（已跳过记录）").arg(QFileInfo(path).fileName()));
+        const QString name = QFileInfo(path).fileName();
+        const QSize hdr = QImageReader(path).size();   // 仅失败路径再读一次头，区分超限与坏文件
+        ui.statusBar->showMessage(exceedsDecodeLimits(hdr)
+            ? tr("%1 图片过大（%2×%3），超出解码上限（已跳过记录）").arg(name).arg(hdr.width()).arg(hdr.height())
+            : tr("%1 无法读取（已跳过记录）").arg(name));
         ui.canvas->clearImage();
         if (m_lblInfo) m_lblInfo->clear();
+        resetFullRes();             // 坏图无"原始尺寸"可切
         // Task 6：HEIC 解码失败 → 给出一次性的部署完整性提示（其他格式不受影响）。
         maybeWarnHeicUnavailable(path);
         updateActionStates();   // Task 7：坏图仍允许 prev/next 走开，不置灰
@@ -369,9 +479,22 @@ void MainWindow::onLoadFinished(const QString& path, const QImage& img)
     ui.canvas->setImage(img);
     const QFileInfo fi(path);
     L_DEBUG("已上屏: {} ({}x{}, {})", path.toStdString(), img.width(), img.height(), humanSize(fi.size()).toStdString());
-    ui.statusBar->clearMessage();
-    if (m_lblInfo)
-        m_lblInfo->setText(tr("%1×%2 · %3").arg(img.width()).arg(img.height()).arg(humanSize(fi.size())));
+    const QString downscaledFrom = img.text(QLatin1String(kDownscaledFrom));
+    m_shownImg = img;
+    m_downscaledFrom = downscaledFrom;
+    setFullResChecked(false);
+    if (downscaledFrom.isEmpty()) {
+        ui.statusBar->clearMessage();
+        m_baseInfoText = tr("%1×%2 · %3").arg(img.width()).arg(img.height()).arg(humanSize(fi.size()));
+        if (m_lblInfo) m_lblInfo->setText(m_baseInfoText);
+    } else {
+        // 超大 JPEG 走了解码期降采样：说明原图尺寸，避免用户以为图片本身糊。
+        ui.statusBar->showMessage(tr("图片过大（原图 %1），已降采样至 %2×%3 显示，可点工具栏\"原始尺寸\"看全分辨率")
+                                      .arg(downscaledFrom).arg(img.width()).arg(img.height()), 8000);
+        m_baseInfoText = tr("%1×%2（原图 %3）· %4").arg(img.width()).arg(img.height())
+                               .arg(downscaledFrom).arg(humanSize(fi.size()));
+        if (m_lblInfo) m_lblInfo->setText(m_baseInfoText);
+    }
     updateActionStates();       // Task 7：有图上屏 → 恢复动作可用
     preloadNeighbors();         // Task 7：预解码相邻两张（命中缓存的路径直接跳过）
 }
@@ -478,7 +601,8 @@ void arcArrow(QPainter& p, const QPointF& c, double r, double startDeg, double e
 
 void installToolbarIcons(Ui::ViewerForm& ui, const QColor& fg,
                          QIcon& slideOff, QIcon& slideOn,
-                         QIcon& panelOff, QIcon& panelOn)
+                         QIcon& panelOff, QIcon& panelOn,
+                         QIcon& fullResOff, QIcon& fullResOn)
 {
     ui.actOpen->setIcon(lineIcon([](QPainter& p, const QColor&) {
         p.drawPolyline(QPolygonF() << QPointF(3.5, 19.5) << QPointF(3.5, 7)
@@ -518,6 +642,20 @@ void installToolbarIcons(Ui::ViewerForm& ui, const QColor& fg,
         p.setPen(c);
         p.drawText(QRectF(0, 0, 24, 24), Qt::AlignCenter, QStringLiteral("1:1"));
     }, fg));
+    // 原始尺寸：外框 + 2×2 实心像素格，读作"逐原始像素"，与 actFit 的四角框区分。
+    const auto fullResDraw = [](QPainter& p, const QColor& c) {
+        p.drawRect(QRectF(4.5, 4.5, 15, 15));
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        p.drawRect(QRectF(8.2, 8.2, 3.2, 3.2));
+        p.drawRect(QRectF(12.6, 8.2, 3.2, 3.2));
+        p.drawRect(QRectF(8.2, 12.6, 3.2, 3.2));
+        p.drawRect(QRectF(12.6, 12.6, 3.2, 3.2));
+        p.setBrush(Qt::NoBrush);
+    };
+    fullResOff = lineIcon(fullResDraw, fg);
+    fullResOn  = lineIcon(fullResDraw, Qt::white);
+    ui.actFullRes->setIcon(ui.actFullRes->isChecked() ? fullResOn : fullResOff);
     ui.actRotateL->setIcon(lineIcon([](QPainter& p, const QColor&) {
         arcArrow(p, QPointF(12, 12.5), 8.0, -190, 90);   // 箭头在顶部指向左
     }, fg));
@@ -602,7 +740,8 @@ void MainWindow::applyTheme()
     installToolbarIcons(ui, m_theme == 1 ? QColor(0x33, 0x35, 0x38)
                                          : QColor(0xd8, 0xd9, 0xdb),
                         m_slideIconOff, m_slideIconOn,
-                        m_panelIconOff, m_panelIconOn);
+                        m_panelIconOff, m_panelIconOn,
+                        m_fullResIconOff, m_fullResIconOn);
 }
 
 // Task 7：画布右键菜单（customContextMenuRequested 显式 connect 进来）。

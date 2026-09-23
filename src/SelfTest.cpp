@@ -300,6 +300,24 @@ int SelfTest::run()
         CHECK(noHeader, "limits: unknown header size passes to reader");
     }
 
+    // --- 超大 JPEG 走解码期降采样（libjpeg M/8），其余格式仍硬拒 ---
+    {
+        const QSize huge(20557, 23049);   // 4.74 亿像素拼接地图（真实样本，曾被守卫误伤）
+        const QSize t = jpegDownscaleTarget(huge, true);
+        const bool jpegScaled = t == QSize(huge.width() / 4, huge.height() / 4)
+                             && pixelsOf(t) <= kDisplayBudget;      // 118MP(1/2) 仍超 40MP → 取 1/4
+        const bool pngRejected = !jpegDownscaleTarget(huge, false).isValid();
+        const bool fitsNoScale = !jpegDownscaleTarget(QSize(8000, 6000), true).isValid();
+        const bool sideStillRejected = !jpegDownscaleTarget(QSize(40000, 40000), true).isValid();
+        const QSize clamped = jpegDownscaleTarget(huge, true, 1000 * 1000);   // 预算小到 1/8 都不够
+        const bool clampsAtEighth = clamped == QSize(huge.width() / 8, huge.height() / 8);
+        CHECK(jpegScaled, "limits: oversized jpeg targets the 1/4 libjpeg step within budget");
+        CHECK(pngRejected, "limits: non-jpeg oversize gets no downscale (full-decode formats stay guarded)");
+        CHECK(fitsNoScale, "limits: in-budget image asks for no downscale");
+        CHECK(sideStillRejected, "limits: pathological side beats the downscale path");
+        CHECK(clampsAtEighth, "limits: downscale divisor clamps at 1/8");
+    }
+
     // --- FileAssoc (纯逻辑：命令行拼装与扩展名表，绝不写注册表) ---
     {
         const QString cmd = FileAssoc::openCommand("C:/Program Files/LightSee/LightSee.exe");
@@ -403,6 +421,15 @@ int SelfTest::run()
               "titlebar: caption buttons exist and statusbar file label present");
         CHECK(tb && tb->parent() == &probe,
               "titlebar: installed as menu-area widget (direct child of MainWindow)");
+    }
+
+    // --- "原始尺寸"开关：无图时必须不可点（只有降采样上屏后才解禁），图标已装 ---
+    {
+        MainWindow probe;
+        QAction* a = probe.findChild<QAction*>("actFullRes");
+        CHECK(a && a->isCheckable() && !a->isEnabled(),
+              "fullres: checkable action, disabled while nothing is downscaled on screen");
+        CHECK(a && !a->icon().isNull(), "fullres: line icon installed by applyTheme");
     }
 
     L_INFO("==== 自检结束：失败 {} 项 ====", g_fail);

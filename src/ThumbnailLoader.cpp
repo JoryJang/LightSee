@@ -13,7 +13,9 @@ static QPixmap renderThumb(const QString& path)
     QImageReader r(path);
     r.setAutoTransform(true);
     const QSize s = r.size();
-    if (exceedsDecodeLimits(s)) {              // R1：解压炸弹/病态大图不进缩略图解码
+    // R1：病态单边尺寸任何格式都拒；像素超限的 JPEG 放行——下面的 setScaledSize 由
+    // libjpeg 在解码阶段降采样，内存受控（PNG 等整图解码后再缩放，帮不上，仍须拒）。
+    if (exceedsSideLimit(s) || (exceedsPixelLimit(s) && !isJpegFormat(r.format()))) {
         L_DEBUG("缩略图尺寸超限，跳过: {}", path.toStdString());
         return QPixmap();
     }

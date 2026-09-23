@@ -56,10 +56,13 @@ private slots:
     void onPrev();
     void onInfo();
     void onSlideToggled(bool on);
+    void onFullResToggled(bool on);         // 超大图"原始尺寸"开关：绕守卫整图重解码
     void onDelete();
     void onCanvasMenu(const QPoint& pos);   // Task 7：画布右键（背景三档/幻灯片间隔）
 private:
     void startLoad(const QString& path);
+    void resetFullRes();                 // 换图即丢弃原始尺寸结果（GB 级内存不跨图滞留）
+    void setFullResChecked(bool on);     // 只改勾选态/图标，不触发解码
     void showCurrent();
     void rebuildThumbPanel();
     void updatePanelVisibility();   // actPanel 勾选且当前目录有图才显示
@@ -82,6 +85,11 @@ private:
     int m_theme = 0;                                    // 0=深色 1=浅色（设置键 ui/theme）
     QIcon m_slideIconOff, m_slideIconOn;    // 勾选蓝底需反白的图标对：幻灯片
     QIcon m_panelIconOff, m_panelIconOn;    // ……缩略图栏
+    QIcon m_fullResIconOff, m_fullResIconOn;// ……原始尺寸
+    QImage m_shownImg;          // 当前上屏的降采样版本：取消"原始尺寸"时直接换回，不重解码
+    QImage m_fullResImg;        // 原始尺寸解码结果：只上屏，绝不进预加载缓存（可达 GB 级）
+    QString m_downscaledFrom;   // 非空 = 当前图是降采样上屏，actFullRes 才可点
+    QString m_baseInfoText;     // 降采样版本的信息栏文案，取消"原始尺寸"时还原
     std::shared_ptr<PreloadCache> m_cache;              // Task 7：worker 持 shared_ptr 副本，见 PreloadCache.h
     QThreadPool m_preloadPool;                          // P1：相邻图预解码专用 1 线程池
     ThumbnailLoader* m_thumbs = nullptr;

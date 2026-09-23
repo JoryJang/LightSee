@@ -234,6 +234,7 @@
    <addaction name="actZoomOut"/>
    <addaction name="actFit"/>
    <addaction name="actActual"/>
+   <addaction name="actFullRes"/>
    <addaction name="separator"/>
    <addaction name="actRotateL"/>
    <addaction name="actRotateR"/>
@@ -282,6 +283,20 @@
   <action name="actActual">
    <property name="text">
     <string>1:1</string>
+   </property>
+  </action>
+  <action name="actFullRes">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>原始尺寸</string>
+   </property>
+   <property name="toolTip">
+    <string>按原始尺寸重新解码（不降采样，超大图内存占用高）</string>
    </property>
   </action>
   <action name="actRotateL">

@@ -157,15 +157,26 @@ void ImageView::setBackgroundMode(Background mode)
     viewport()->update();
 }
 
-void ImageView::setImage(const QImage& img)
+void ImageView::setImage(const QImage& img, bool keepView)
 {
-    L_DEBUG("画布显示图像: {}x{}", img.width(), img.height());
+    L_DEBUG("画布显示图像: {}x{}{}", img.width(), img.height(), keepView ? " (保持视野)" : "");
+    // 手动缩放下换像素源：记住当前倍率，重建 item 后原样还原（适应窗口态无需记，
+    // 下面 fitToWindow 会按新图重算）。
+    const bool keep = keepView && !m_fitMode && m_item;
+    const double zoom = keep ? transform().m11() : 1.0;
     m_scene->clear();
     m_item = m_scene->addPixmap(QPixmap::fromImage(img));
     m_item->setTransformationMode(Qt::SmoothTransformation);
     applyItemTransform();   // 内含 sceneRect 收缩到当前图（大图后小图不残留滚动条）
-    // 切图统一回到"适应窗口 + 居中"，不沿用上一张的缩放/平移状态。
-    fitToWindow();
+    if (keep) {
+        resetTransform();
+        scale(zoom, zoom);
+        centerOn(m_item);
+        emit zoomChanged(transform().m11());
+    } else {
+        // 切图统一回到"适应窗口 + 居中"，不沿用上一张的缩放/平移状态。
+        fitToWindow();
+    }
     // 连续翻页时鼠标未离开画布，保持按钮可见（Enter 不会再触发）
     if (m_item && viewport()->underMouse()) setOverlayVisible(true);
 }

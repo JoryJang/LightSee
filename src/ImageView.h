@@ -14,7 +14,8 @@ public:
     // Task 7：画布背景三档（checker = 16px 双灰平铺）。
     enum Background { Dark, Light, Checker };
     explicit ImageView(QWidget* parent = nullptr);
-    void setImage(const QImage& img);
+    // keepView=true：换像素源（降采样↔原始尺寸）时保住当前缩放与中心，只改清晰度。
+    void setImage(const QImage& img, bool keepView = false);
     void clearImage();
     void setBackgroundMode(Background mode);
 public slots:
